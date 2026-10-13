@@ -1,0 +1,34 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dialogue-dash",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+
+  // Static front end (public/) is served directly; /api/* always runs the Worker first.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // 1) Run:  npx wrangler d1 create dialogue-dash   2) paste the database_id it prints below.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "dialogue-dash", "database_id": "00000000-0000-0000-0000-000000000000" }
+  ],
+
+  // Throttle sign-in guessing and guest creation (per IP). Remove if you prefer a WAF rate-limit rule.
+  "ratelimits": [
+    { "name": "RL_LOGIN", "namespace_id": "4101", "simple": { "limit": 15, "period": 60 } },
+    { "name": "RL_GUEST", "namespace_id": "4102", "simple": { "limit": 6, "period": 60 } }
+  ],
+
+  // Daily clean-up of old guest accounts (03:00 Singapore time).
+  "triggers": { "crons": ["0 19 * * *"] },
+
+  "vars": {
+    "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "AI_CONFIDENCE_MIN": "0.8",
+    "AI_DAILY_CAP": "300",
+    "GUEST_RETENTION_DAYS": "30"
+  }
+}

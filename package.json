@@ -1,0 +1,19 @@
+{
+  "name": "dialogue-dash",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Gamified dialogue-writing practice (speech marks, punctuation, speech tags) on Cloudflare Workers + D1",
+  "scripts": {
+    "seed:build": "node scripts/make-seed.mjs",
+    "test": "node --test test/engine.test.mjs test/verbs.test.mjs",
+    "dev": "wrangler dev",
+    "db:init:local": "wrangler d1 execute dialogue-dash --local --file=./schema.sql && wrangler d1 execute dialogue-dash --local --file=./seed.sql",
+    "db:init:remote": "wrangler d1 execute dialogue-dash --remote --file=./schema.sql && wrangler d1 execute dialogue-dash --remote --file=./seed.sql",
+    "deploy": "wrangler deploy",
+    "e2e": "node test/e2e.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}
