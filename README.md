@@ -12,13 +12,22 @@ Cloudflare Worker + static assets + D1 (+ optional Workers AI). No build step.
 ```bash
 npm install
 npx wrangler d1 create dialogue-dash        # paste the database_id into wrangler.jsonc
-npm run db:init:remote                      # schema + 35 seed questions + 107 verbs
+npm run db:init:remote                      # schema + 450 questions (150 per mode) + 107 verbs
 npx wrangler secret put teacher_user
 npx wrangler secret put teacher_password
 npx wrangler secret put session_secret      # optional but recommended (any long random string)
 npm run deploy
 ```
 Pupils use `/`; teachers use `/teacher`. Teacher sign-in fails closed until the two secrets exist.
+
+### Question bank file
+`questions-450.sql` holds all 450 questions (150 per mode) and is safe to run on any database that already has the schema:
+fresh, one seeded with questions 1-35, one with questions your teachers added, or repeatedly. A question is inserted only if the
+same question is not already there; existing questions, ids and pupil results are never changed. Top up a live database with:
+```bash
+npm run db:questions:remote
+```
+Edit `scripts/seed-*.mjs` and run `npm run seed:build` to regenerate both `seed.sql` and `questions-450.sql`.
 
 ## Local dev
 ```bash

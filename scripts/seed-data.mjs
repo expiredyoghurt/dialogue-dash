@@ -73,6 +73,97 @@ export const MODE3 = [
   { speaker: 'Mr Lim', line: 'It’s all right; we can try again tomorrow,', context: 'The class football team has just lost, and the players are upset. Mr Lim stays gentle.', target: ['kind', 'calm'] },
 ];
 
+// ---------- Set 2 (added later; keep these separate so existing question ids never shift) ----------
+export const MODE1_MORE = [
+  { correct: '“Can I borrow your eraser?” asked Wei Ling.' },
+  { correct: 'Mr Tan said, “Hand in your books before recess.”', lowerFirst: true },
+  { correct: '“I forgot my water bottle,” said Aiden.', lowerFirst: true },
+  { correct: '“That was amazing!” cried Sarah.' },
+  { correct: 'Auntie Mei asked, “Would you like some more rice?”' },
+  { correct: '“We’ll take the MRT,” said Dad.', lowerFirst: true },
+  { correct: 'Ms Kumar warned, “Don’t touch the hot pot.”', lowerFirst: true },
+  { correct: '“Is the canteen open yet?” asked Farhan.' },
+  { correct: '“Hurry up!” called Mum. “The bus is coming.”', lowerFirst: true },
+  { correct: '“If we leave now,” said Jun, “we can catch the train.”' },
+  { correct: 'Grandpa said, “This used to be a kampong.”' },
+  { correct: '“Who took my pencil case?” demanded Mr Goh.' },
+  { correct: '“I’m so proud of you!” beamed Mrs Lee.' },
+  { correct: 'Nina muttered, “I hope it doesn’t rain.”' },
+  { correct: '“Please be quiet,” whispered the librarian. “Others are reading.”', lowerFirst: true },
+];
+
+export const MODE2_MORE = [
+  {
+    correct: 'Ms Kumar asked, “Who finished the worksheet?”\n“I did,” said Ethan.',
+    faulty: 'Ms Kumar asked who finished the worksheet\n“I did” said Ethan.',
+  },
+  {
+    correct: '“Please sit down,” said Mr Goh. “The bell has rung.”',
+    faulty: '“Please sit down.” said Mr Goh “the bell has rung”',
+  },
+  {
+    correct: 'Mum called, “Dinner is ready!”',
+    faulty: 'Mum called Dinner is ready',
+  },
+  {
+    correct: '“Is this seat taken?” asked Mei Ling.',
+    faulty: '“is this seat taken.” asked Mei Ling',
+  },
+  {
+    correct: '“I can’t wait for the school trip!” squealed Nina.',
+    faulty: 'I can’t wait for the school trip! squealed Nina.',
+  },
+  {
+    correct: 'Aiden said, “I left my bag on the bus.”\n“Don’t worry,” said Dad. “We’ll call them.”',
+    faulty: 'Aiden said “i left my bag on the bus.”\n“Dont worry”, said Dad “we’ll call them.”',
+  },
+  {
+    correct: '“If it rains,” said Jun, “we will stay inside.”',
+    faulty: '“If it rains.” said Jun “We will stay inside.”',
+  },
+  {
+    correct: 'Grandpa asked, “Have you eaten?”\n“Not yet,” replied Kai.',
+    faulty: 'Grandpa asked, “have you eaten”\n“Not yet.” replied Kai.',
+  },
+  {
+    correct: '“Wow!” gasped Sarah. “That’s the tallest building I’ve ever seen!”',
+    faulty: '“Wow” gasped Sarah. “thats the tallest building I’ve ever seen!”',
+  },
+  {
+    correct: 'The librarian whispered, “Please keep your voices down.”',
+    faulty: 'The librarian whispered “please keep your voices down”',
+  },
+  {
+    correct: '“Where are we going?” asked Hana.\n“To the zoo,” said Mum.',
+    faulty: '“Where are we going.” asked Hana.\n“To the zoo” said Mum.',
+  },
+  {
+    correct: 'Coach Lim shouted, “Pass the ball!”\n“I’m open!” yelled Dan.',
+    faulty: 'Coach Lim shouted “Pass the ball”\n“I’m open” yelled Dan.',
+  },
+  {
+    correct: '“Thank you,” said the class.',
+    faulty: '“thank you” said the class.',
+  },
+];
+
+export const MODE3_MORE = [
+  { speaker: 'Wei Ling', line: 'I’m so nervous about the spelling test,', context: 'Wei Ling’s hands are shaking as she waits outside the classroom.', target: ['scared'] },
+  { speaker: 'Mr Goh', line: 'Stop talking right now!', context: 'The class has ignored him for the third time and he has run out of patience.', target: ['angry', 'loud'] },
+  { speaker: 'Nina', line: 'I got the part in the school play!', context: 'Nina has just read the cast list on the noticeboard.', target: ['excited', 'happy'] },
+  { speaker: 'Dad', line: 'It’s okay, you did your best,', context: 'Aiden lost his race and is trying not to cry. Dad crouches down beside him.', target: ['kind', 'calm'] },
+  { speaker: 'Jun', line: 'Please can I have one more chance?', context: 'Jun has failed to hand in his homework twice, and the teacher is about to give him a detention.', target: ['pleading'] },
+  { speaker: 'Hana', line: 'I think the old library hides a secret,', context: 'Hana has found a strange key tucked behind a dusty shelf.', target: ['curious'] },
+  { speaker: 'Sarah', line: 'You dropped your ice cream, didn’t you?', context: 'Sarah is sneering at a classmate who has just tripped on the pavement.', target: ['mocking'] },
+  { speaker: 'Ethan', line: 'Someone is behind us,', context: 'It is dark in the empty car park, and Ethan has just heard footsteps.', target: ['scared', 'soft'] },
+  { speaker: 'Mrs Lee', line: 'Our school has won the national award!', context: 'The principal has just announced the result and Mrs Lee is delighted with her students.', target: ['proud', 'excited'] },
+  { speaker: 'Farhan', line: 'That’s my last piece of cake!', context: 'Farhan turns around and sees his brother holding the cake he saved.', target: ['shocked'] },
+  { speaker: 'Grandpa', line: 'Come and sit beside me,', context: 'Grandpa pats the sofa for his granddaughter, who has had a bad day at school.', target: ['kind', 'soft'] },
+  { speaker: 'Dina', line: 'I can’t believe he forgot my birthday,', context: 'Dina is sitting alone on her bed, staring at her phone.', target: ['sad'] },
+  { speaker: 'Coach Lim', line: 'Keep going, you’re almost there!', context: 'Coach Lim cheers across the field as his team sprints the final lap.', target: ['loud', 'excited'] },
+  { speaker: 'Auntie Mei', line: 'Be careful, the floor is wet,', context: 'A small child is about to run across the freshly mopped canteen floor. Auntie Mei speaks without panic.', target: ['calm'] },
+];
+
 // Saying verbs: base:past:tag,tag
 export const VERBS = `
 shout:shouted:loud
