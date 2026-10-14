@@ -13,7 +13,7 @@
 
   // 1) Run:  npx wrangler d1 create dialogue-dash   2) paste the database_id it prints below.
   "d1_databases": [
-    { "binding": "DB", "database_name": "dialogue-dash", "database_id": "REPLACE_WITH_YOUR_f4037922-09ff-4180-829d-b479b3354337" }
+    { "binding": "DB", "database_name": "dialogue-dash", "database_id": "f4037922-09ff-4180-829d-b479b3354337" }
   ],
 
   // Workers AI: only used when a pupil types a verb that is not in the verb bank (Mode 3).
