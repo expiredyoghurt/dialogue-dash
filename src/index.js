@@ -17,7 +17,7 @@ async function route(request, env, url) {
 
   if (!env.DB) throw new HttpError(500, 'The database is not connected. Check the D1 binding.');
 
-  if (path === '/api/meta' && m === 'GET') return pupil.meta();
+  if (path === '/api/meta' && m === 'GET') return pupil.meta(env);
   if (path === '/api/login' && m === 'POST') return pupil.login(request, env);
   if (path === '/api/guest' && m === 'POST') return pupil.guest(request, env);
   if (path === '/api/teacher/login' && m === 'POST') return teacherLogin(request, env);
@@ -42,15 +42,18 @@ async function route(request, env, url) {
   if (path === '/api/questions' && m === 'GET') return pupil.listQuestions(env, p, url);
   if (path === '/api/answer' && m === 'POST') return pupil.answer(request, env, p);
   if (path === '/api/route' && m === 'POST') return pupil.route(request, env, p);
+  if (path === '/api/prefs' && m === 'PUT') return pupil.prefs(request, env, p);
   throw new HttpError(404, 'Not found.');
 }
 
 async function purgeGuests(env) {
   const days = parseInt(env.GUEST_RETENTION_DAYS || '30', 10);
   const cutoff = Date.now() - days * 86_400_000;
-  try {
-    await env.DB.prepare('DELETE FROM route_runs WHERE pupil_id IN (SELECT id FROM pupils WHERE is_guest = 1 AND created_at < ?1)').bind(cutoff).run();
-  } catch {} // table not migrated yet
+  for (const table of ['route_runs', 'pupil_prefs']) {
+    try {
+      await env.DB.prepare(`DELETE FROM ${table} WHERE pupil_id IN (SELECT id FROM pupils WHERE is_guest = 1 AND created_at < ?1)`).bind(cutoff).run();
+    } catch {} // table not migrated yet
+  }
   await env.DB.batch([
     env.DB.prepare('DELETE FROM attempts WHERE pupil_id IN (SELECT id FROM pupils WHERE is_guest = 1 AND created_at < ?1)').bind(cutoff),
     env.DB.prepare('DELETE FROM pupils WHERE is_guest = 1 AND created_at < ?1').bind(cutoff),

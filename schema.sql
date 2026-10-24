@@ -142,3 +142,10 @@ CREATE TABLE IF NOT EXISTS class_owners (
   teacher_id INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS class_owners_teacher ON class_owners(teacher_id);
+
+-- Settings a pupil chose for themselves (garage look, sound, punctuation keys), so they follow them to any device.
+CREATE TABLE IF NOT EXISTS pupil_prefs (
+  pupil_id INTEGER PRIMARY KEY,
+  prefs TEXT NOT NULL DEFAULT '{}',          -- JSON: { garage: {paint, helmet, sticker}, sound: bool, keys: bool|null }
+  updated_at INTEGER NOT NULL
+);

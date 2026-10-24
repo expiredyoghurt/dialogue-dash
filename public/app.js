@@ -217,7 +217,60 @@
     );
   }
 
+  // ---------- install to the home screen ----------
+  let deferredInstall = null;
+  const isStandalone = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+  const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault(); // keep it until the pupil taps our own button
+    deferredInstall = e;
+    if (S.me && S.view === 'progress') render();
+  });
+  window.addEventListener('appinstalled', () => {
+    deferredInstall = null;
+    UI.toast('Installed! Find Dash Express on your home screen.', { kind: 'ok' });
+    if (S.me && S.view === 'progress') render();
+  });
+  function installPanel() {
+    if (isStandalone()) return null;
+    if (deferredInstall) {
+      return h('section', { class: 'panel row install' },
+        h('div', { class: 'grow' }, h('h2', { style: 'margin:0 0 4px' }, 'Put Dash Express on your home screen'), h('p', { class: 'small muted', style: 'margin:0' }, 'It opens full screen, like an app, and starts quickly.')),
+        h('button', { class: 'btn', type: 'button', onclick: async () => {
+          const ev = deferredInstall;
+          deferredInstall = null;
+          try {
+            await ev.prompt();
+          } catch {}
+          render();
+        } }, 'Install'));
+    }
+    if (isIOS()) {
+      return h('section', { class: 'panel install' }, h('h2', { style: 'margin:0 0 4px' }, 'Put Dash Express on your home screen'), h('p', { class: 'small', style: 'margin:0' }, 'In Safari, tap the Share button, then “Add to Home Screen”.'));
+    }
+    return null;
+  }
+
   // ---------- chrome ----------
+  const Sfx = window.DashSfx || { enabled: () => false, setEnabled() {}, play() {} };
+  const UI = window.DashUI;
+  const icon = (paths) => Art.sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true', focusable: 'false' }, paths.map((d) => Art.sv('path', { d, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' })));
+  const ICONS = {
+    home: ['M3 11l9-7 9 7', 'M5 10v10h14V10', 'M10 20v-6h4v6'],
+    depot: ['M4 8l8-4 8 4v9l-8 4-8-4z', 'M4 8l8 4 8-4', 'M12 12v9'],
+    garage: ['M3 17h18', 'M5 17l1.5-6h11L19 17', 'M7 17v2M17 17v2', 'M9 13h6'],
+    me: ['M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', 'M4 21c0-4 3.5-6 8-6s8 2 8 6'],
+  };
+  function soundButton() {
+    const on = Sfx.enabled();
+    return h('button', { class: 'iconbtn', type: 'button', id: 'soundbtn', 'aria-pressed': String(on), 'aria-label': 'Sound effects', title: on ? 'Sound on' : 'Sound off', onclick: () => {
+      Sfx.setEnabled(!Sfx.enabled());
+      savePrefs({ sound: Sfx.enabled() });
+      const nb = soundButton();
+      $('#soundbtn').replaceWith(nb);
+      UI.announce(Sfx.enabled() ? 'Sound on' : 'Sound off');
+    } }, icon(on ? ['M4 9v6h4l5 4V5L8 9z', 'M16 9a4 4 0 0 1 0 6', 'M18.5 6.5a8 8 0 0 1 0 11'] : ['M4 9v6h4l5 4V5L8 9z', 'M17 9l4 6M21 9l-4 6']));
+  }
   function header() {
     const me = S.me;
     return [
@@ -225,9 +278,10 @@
         h('div', { class: 'brand' }, h('span', { class: 'bubble-logo', 'aria-hidden': 'true' }, '“”'), 'Dash Express'),
         me ? h('span', { class: 'chip', id: 'rankchip' }, me.rank.name) : null,
         me ? h('span', { class: 'chip xp', id: 'xpchip', 'aria-label': me.xp + ' experience points' }, me.xp + ' XP') : null,
+        soundButton(),
         h('button', { class: 'btn ghost small', type: 'button', onclick: () => signOut('') }, 'Sign out'),
       ),
-      h('nav', { class: 'tabs', 'aria-label': 'Sections' },
+      h('nav', { class: 'tabs desk', 'aria-label': 'Sections' },
         tab('home', 'Town'),
         tab('depot', 'Depot'),
         tab('garage', 'Garage'),
@@ -236,6 +290,13 @@
         tab('progress', 'My progress'),
       ),
     ];
+  }
+  // Four big buttons along the bottom on phones. Redeliveries and the Handbook live under "Me".
+  function bottomNav() {
+    const me = S.me;
+    const cur = (v) => (v === 'home' ? S.view === 'home' || S.view === 'play' : v === 'progress' ? ['progress', 'practice', 'rules'].includes(S.view) : S.view === v);
+    const item = (v, label, badge) => h('button', { class: 'bn', type: 'button', 'aria-current': cur(v) ? 'page' : false, onclick: () => { S.view = v; S.R = null; render(); } }, icon(ICONS[v === 'progress' ? 'me' : v]), label, badge ? h('span', { class: 'badge', 'aria-label': badge + ' to redeliver' }, badge) : null);
+    return h('nav', { class: 'bottomnav', 'aria-label': 'Main' }, item('home', 'Town'), item('depot', 'Depot'), item('garage', 'Garage'), item('progress', 'Me', me && me.wrong ? me.wrong : 0));
   }
   function tab(view, label, badge) {
     const cur = S.view === view || (view === 'home' && S.view === 'play');
@@ -254,6 +315,8 @@
     if (res && res.xpTotal != null && S.me) {
       S.me.xp = res.xpTotal;
       S.me.rank = res.rank;
+      if (res.vehicle) S.me.vehicle = res.vehicle;
+      if (res.level && S.me.level) S.me.level.level = res.level;
       updateChips();
     }
   }
@@ -262,6 +325,28 @@
   async function loadMe() {
     S.me = await api('/me');
     S.pupil = S.me.pupil;
+    // Choices saved on the account win over this device's, so a pupil's ride and settings follow them around.
+    const pr = S.me.prefs || {};
+    if (typeof pr.sound === 'boolean') Sfx.setEnabled(pr.sound, { quiet: true });
+    if (typeof pr.keys === 'boolean') store.set(KEYS_PREF, pr.keys ? '1' : '0');
+  }
+  // Saved a moment after the last change, so flicking a switch a few times is one request. A failure never
+  // breaks the game: the choice still works on this device.
+  let prefTimer = null;
+  let prefPending = {};
+  function savePrefs(patch) {
+    Object.assign(prefPending, patch);
+    clearTimeout(prefTimer);
+    prefTimer = setTimeout(async () => {
+      const body = prefPending;
+      prefPending = {};
+      try {
+        const r = await api('/prefs', { method: 'PUT', body });
+        if (S.me) S.me.prefs = { ...(S.me.prefs || {}), ...r.prefs };
+      } catch (e) {
+        UI.toast('Couldn’t save that to your account. It still works on this device.', { kind: 'error' });
+      }
+    }, 350);
   }
 
   // ---------- home ----------
@@ -339,6 +424,9 @@
   }
 
   async function startRound(mode, practice) {
+    const back = S.view === 'play' ? 'home' : S.view;
+    S.busy = 'Packing your parcels';
+    render();
     try {
       const data = await api('/questions?' + (practice ? 'practice=1' : 'mode=' + mode));
       const qs = data.questions;
@@ -347,14 +435,19 @@
       else pool = [...shuffle(qs.filter((q) => q.status === 'new')), ...shuffle(qs.filter((q) => q.status === 'wrong')), ...shuffle(qs.filter((q) => q.status === 'done'))];
       pool = takeRound(pool, practice ? 8 : 5);
       if (!pool.length) {
+        S.busy = '';
+        S.view = back;
         S.flash = 'There are no questions here yet.';
         render();
         return;
       }
+      S.busy = '';
       S.R = { kind: 'practice', list: pool, i: 0, practice: true, mode, xp: 0, right: 0, results: [], combo: 0, bestCombo: 0, slips: 0, over: false, startedAt: Date.now(), t0: Date.now() };
       S.view = 'play';
       render();
     } catch (e) {
+      S.busy = '';
+      S.view = back;
       S.flash = e.message;
       render();
     }
@@ -365,13 +458,16 @@
     R.results[R.i] = correct ? 'done' : 'bad';
     if (correct) R.right++;
     R.xp += xp || 0;
-    if (correct && S.lastTry === 1) {
+    const slipped = !(correct && S.lastTry === 1);
+    if (!slipped) {
       R.combo++;
       R.bestCombo = Math.max(R.bestCombo, R.combo);
     } else {
       R.combo = 0;
       R.slips++;
     }
+    Sfx.play(!correct ? (R.kind === 'big' ? 'slip' : 'wrong') : R.combo >= 2 ? 'combo' : 'right');
+    UI.announce(!correct ? 'Not this time.' : R.combo >= 2 ? 'Correct! Combo times ' + Math.min(R.combo, 4) + '.' : 'Correct!');
     const patience = (S.meta.route || {}).patience || 3;
     if (R.kind === 'big' && R.slips >= patience) R.over = true;
     refreshStrip();
@@ -393,6 +489,9 @@
     const q = R.list[R.i];
     const rulesDlg = rulesDialog();
     const stage = { 1: qMode1, 2: qMode2, 3: qMode3, 4: qMode4, 5: qMode5, 6: qMode6 }[q.mode](q);
+    // On phones the main button (Check, Fix it, Continue) stays in reach while you scroll a long question.
+    const act = stage.querySelector('.actions');
+    if (act && !act.closest('.dock')) act.classList.add('sticky-actions');
     return h('div', { class: 'wrap' },
       h('div', { class: 'stagebar' },
         h('div', { class: 'grow' }, routeStrip()),
@@ -422,6 +521,61 @@
     );
   }
 
+  // ---------- typing aids: punctuation keys, and a bar that stays above the on-screen keyboard ----------
+  const KEYS_PREF = 'dd_keys';
+  // Shown by default on touch screens (hard to type “ ” there). Anyone can switch them on or off; it is remembered.
+  function keysWanted() {
+    const v = store.get(KEYS_PREF);
+    if (v === '1') return true;
+    if (v === '0') return false;
+    return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  }
+  const PUNCT = [['“', 'open speech marks'], ['”', 'close speech marks'], ['‘', 'open single quote'], ['’', 'apostrophe or close single quote'], [',', 'comma'], ['.', 'full stop'], ['?', 'question mark'], ['!', 'exclamation mark'], [':', 'colon'], [';', 'semicolon'], ['—', 'dash'], ['…', 'ellipsis']];
+  // getTarget() returns the box to type into. Pressing a key must not steal focus (that would close the keyboard on a phone).
+  function punctKeys(getTarget, { newline = false } = {}) {
+    const insert = (c) => {
+      const t = getTarget();
+      if (!t || t.disabled) return;
+      const a = t.selectionStart == null ? t.value.length : t.selectionStart;
+      const b = t.selectionEnd == null ? t.value.length : t.selectionEnd;
+      t.setRangeText(c, a, b, 'end');
+      t.dispatchEvent(new Event('input', { bubbles: true }));
+      t.focus();
+      Sfx.play('tap');
+    };
+    const keys = h('div', { class: 'keys', role: 'group', 'aria-label': 'Punctuation keys' },
+      [...PUNCT, ...(newline ? [['\n', 'new line']] : [])].map(([c, name]) =>
+        h('button', { type: 'button', 'aria-label': name, onpointerdown: (e) => e.preventDefault(), onmousedown: (e) => e.preventDefault(), onclick: () => insert(c) }, c === '\n' ? '↵ new line' : c)));
+    const toggle = h('button', { class: 'keys-toggle', type: 'button', onclick: () => {
+      const nowOn = keys.hidden;
+      store.set(KEYS_PREF, nowOn ? '1' : '0');
+      savePrefs({ keys: nowOn });
+      sync();
+    } });
+    const sync = () => {
+      const on = keysWanted();
+      keys.hidden = !on;
+      toggle.textContent = on ? 'Hide punctuation keys' : 'Show punctuation keys';
+      toggle.setAttribute('aria-pressed', String(on));
+    };
+    sync();
+    const el = h('div', { class: 'keyswrap' }, keys, toggle);
+    return { el, keys, hide: () => { el.hidden = true; } };
+  }
+  // The answer bar. On phones it sits at the bottom of the screen, above the keyboard, so the keys and the
+  // Check button are always in reach. On bigger screens it is simply part of the page.
+  function answerDock(...kids) {
+    return h('div', { class: 'dock' }, kids);
+  }
+  function trackKeyboard() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => document.documentElement.style.setProperty('--kb', Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)) + 'px');
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    update();
+  }
+
   // ---------- Mode 1: rewrite ----------
   function qMode1(q) {
     let tryNo = 1;
@@ -431,16 +585,14 @@
     const fb = h('div', { 'aria-live': 'polite' });
     const check = h('button', { class: 'btn', type: 'button' }, 'Check');
     const show = h('button', { class: 'btn ghost', type: 'button', hidden: true }, 'Show me the answer');
-    const keys = h('div', { class: 'keys', role: 'group', 'aria-label': 'Punctuation keys' },
-      [['“', 'open speech marks'], ['”', 'close speech marks'], [',', 'comma'], ['.', 'full stop'], ['?', 'question mark'], ['!', 'exclamation mark'], ['’', 'apostrophe'], ...(lines ? [['\n', 'new line']] : [])].map(([c, name]) =>
-        h('button', { type: 'button', 'aria-label': name, onclick: () => { ta.setRangeText(c, ta.selectionStart, ta.selectionEnd, 'end'); ta.focus(); } }, c === '\n' ? '↵ new line' : c)),
-    );
-
+    const pk = punctKeys(() => ta, { newline: lines });
+    const keys = pk.el;
+    const dock = answerDock(keys, h('div', { class: 'actions' }, check, show));
     const lock = () => {
       ta.disabled = true;
       check.hidden = true;
       show.hidden = true;
-      keys.hidden = true;
+      dock.hidden = true;
     };
     function showAnswer(text, good) {
       bubble.className = 'bubble pre' + (good ? ' good' : '');
@@ -494,9 +646,8 @@
       h('p', { class: 'instruction' }, q.p.instruction || 'Rewrite the sentence with the correct speech marks and punctuation.'),
       bubble,
       ta,
-      keys,
-      h('div', { class: 'actions' }, check, show),
       fb,
+      dock,
     );
   }
 
@@ -607,6 +758,10 @@
           t.input = inp;
         }
         const first = [...inputs.values()][0];
+        let lastFix = first;
+        for (const inp of inputs.values()) inp.addEventListener('focus', () => { lastFix = inp; });
+        const pk2 = punctKeys(() => lastFix);
+        actions.before(pk2.el);
         if (first) first.focus();
         actions.replaceChildren(fixBtn);
         fixBtn.addEventListener('click', async () => {
@@ -822,15 +977,14 @@
     const fb = h('div', { 'aria-live': 'polite' });
     const check = h('button', { class: 'btn', type: 'button' }, 'Check');
     const show = h('button', { class: 'btn ghost', type: 'button', hidden: true }, 'Show me the answer');
-    const keys = h('div', { class: 'keys', role: 'group', 'aria-label': 'Punctuation keys' },
-      [['“', 'open speech marks'], ['”', 'close speech marks'], [',', 'comma'], ['.', 'full stop'], ['?', 'question mark'], ['!', 'exclamation mark'], ['’', 'apostrophe']].map(([c, name]) =>
-        h('button', { type: 'button', 'aria-label': name, onclick: () => { ta.setRangeText(c, ta.selectionStart, ta.selectionEnd, 'end'); ta.focus(); } }, c)),
-    );
+    const pk = punctKeys(() => ta);
+    const keys = pk.el;
+    const dock = answerDock(keys, h('div', { class: 'actions' }, check, show));
     const lock = () => {
       ta.disabled = true;
       check.hidden = true;
       show.hidden = true;
-      keys.hidden = true;
+      dock.hidden = true;
     };
     async function send(payload) {
       check.disabled = true;
@@ -871,7 +1025,7 @@
       }
     });
     setTimeout(() => ta.focus(), 30);
-    return h('div', null, h('p', { class: 'instruction' }, p.instruction), bubble, ta, keys, h('div', { class: 'actions' }, check, show), fb);
+    return h('div', null, h('p', { class: 'instruction' }, p.instruction), bubble, ta, fb, dock);
   }
 
   // ---------- Mode 6: tap the wrong word, then type the fix ----------
@@ -1061,6 +1215,15 @@
     const max = errs.length ? errs[0][1] : 1;
     return h('div', { class: 'wrap' },
       h('h1', null, 'My progress'),
+      installPanel(),
+      h('section', { class: 'panel' },
+        h('div', { class: 'mehub' },
+          h('button', { class: 'btn alt', type: 'button', onclick: () => { S.view = 'practice'; render(); } }, 'Redeliveries' + (me.wrong ? ' (' + me.wrong + ')' : '')),
+          h('button', { class: 'btn alt', type: 'button', onclick: () => { S.view = 'rules'; render(); } }, 'Handbook'),
+          h('button', { class: 'btn alt', type: 'button', onclick: () => { S.view = 'garage'; render(); } }, 'Garage')),
+        h('label', { class: 'field', style: 'flex-direction:row;align-items:center;gap:10px;margin-top:12px' },
+          h('input', { type: 'checkbox', checked: Sfx.enabled(), onchange: (e) => { Sfx.setEnabled(e.target.checked); savePrefs({ sound: e.target.checked }); const nb = soundButton(); const old = $('#soundbtn'); if (old) old.replaceWith(nb); } }),
+          h('span', null, 'Sound effects'))),
       h('div', { class: 'statgrid' },
         h('div', { class: 'stat' }, h('b', null, me.xp), 'XP'),
         h('div', { class: 'stat' }, h('b', null, me.streak), me.streak === 1 ? 'day on the job' : 'days on the job'),
@@ -1091,7 +1254,8 @@
   const Art = window.DashArt;
   const distInfo = (n) => (S.meta.districts || []).find((d) => d.n === n) || { n, name: 'District ' + n, blurb: '' };
   const ruleShort = (n) => (RULE_NAMES()[n] || { short: 'this rule' }).short;
-  const vehicleOf = (rank) => (S.meta.vehicles || [])[rank ? rank.index : 0] || { id: 'foot', name: 'On foot' };
+  // The ride has its own XP amounts (set by the admin), separate from the rank.
+  const vehicleOf = () => (S.me && S.me.vehicle) || { index: 0, id: 'foot', name: 'On foot', next: null };
   const fmtTime = (ms) => {
     const s = Math.max(0, Math.round(ms / 1000));
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
@@ -1105,6 +1269,7 @@
     try {
       g = JSON.parse(store.get(garageKey()) || '{}');
     } catch {}
+    if (S.me && S.me.prefs && S.me.prefs.garage) g = S.me.prefs.garage;
     const C = S.meta.cosmetics || { paints: [], helmets: [], stickers: [] };
     const xp = S.me ? S.me.xp : 0;
     const pick = (list, id) => (list.find((x) => x.id === id && x.at <= xp) || list[0] || { id: '', at: 0 });
@@ -1114,13 +1279,13 @@
     return { paint: paint.color, paintId: paint.id, helmet: helmet.id, sticker: sticker.id };
   }
   const saveGarage = (patch) => {
-    let g = {};
-    try {
-      g = JSON.parse(store.get(garageKey()) || '{}');
-    } catch {}
-    store.set(garageKey(), JSON.stringify({ ...g, ...patch }));
+    const cur = garage();
+    const next = { paint: cur.paintId, helmet: cur.helmet, sticker: cur.sticker, ...patch };
+    store.set(garageKey(), JSON.stringify(next));
+    if (S.me) S.me.prefs = { ...(S.me.prefs || {}), garage: next };
+    savePrefs({ garage: next });
   };
-  const myRide = (size) => Art.vehicleSvg(vehicleOf(S.me.rank).id, garage(), size);
+  const myRide = (size) => Art.vehicleSvg(vehicleOf().id, garage(), size);
 
   function dotSays(...kids) {
     return h('div', { class: 'dot' }, h('div', { class: 'dot-face' }, Art.dotSvg(54)), h('div', { class: 'dot-bubble' }, h('b', { class: 'dot-name' }, 'Dot'), kids));
@@ -1161,7 +1326,7 @@
   function townView() {
     const me = S.me;
     const rk = me.rank;
-    const veh = vehicleOf(rk);
+    const veh = vehicleOf();
     const lv = me.level;
     const pct = Math.max(0, Math.min(100, Math.round(((me.xp - lv.from) / (lv.next - lv.from)) * 100)));
     const nt = lv.nextTier;
@@ -1181,7 +1346,7 @@
             me.tips ? h('span', { class: 'chip xp' }, me.tips + ' tips earned') : null,
           ),
           h('div', { class: 'bar', role: 'img', 'aria-label': pct + '% of the way to level ' + (lv.level + 1) }, h('i', { style: 'width:' + pct + '%' })),
-          h('p', { class: 'muted small', style: 'margin:0' }, lv.next - me.xp + ' XP to level ' + (lv.level + 1) + (rk.next ? ' · ' + (rk.next - me.xp) + ' XP to ' + rk.nextName + ' and a new ride' : ' · top rank, and the fastest ride in Chatterbury!')),
+          h('p', { class: 'muted small', style: 'margin:0' }, lv.next - me.xp + ' XP to level ' + (lv.level + 1) + (rk.next ? ' · ' + (rk.next - me.xp) + ' XP to ' + rk.nextName : '') + (veh.next ? ' · ' + (veh.next - me.xp) + ' XP to a new ride: the ' + veh.nextName.toLowerCase() : '') + (!rk.next && !veh.next ? ' · top rank, and the fastest ride in Chatterbury!' : '')),
           nt ? h('p', { class: 'small', style: 'margin:6px 0 0' }, h('b', null, 'Level ' + nt.level + ' opens '), nt.districts.map((n) => distInfo(n).name).join(', ') + '.') : null,
         ),
       ),
@@ -1242,7 +1407,7 @@
     const C = S.meta.cosmetics;
     const g = garage();
     const rk = me.rank;
-    const cur = vehicleOf(rk);
+    const cur = vehicleOf();
     const swatch = (kind, item, selected) => {
       const open = item.at <= me.xp;
       const rainbow = item.color === 'rainbow';
@@ -1259,11 +1424,10 @@
       h('section', { class: 'panel garage-show' }, h('div', { class: 'ride big' }, myRide(260)), h('p', { class: 'muted small', style: 'margin:0' }, cur.name + ' · ' + rk.name)),
       h('section', { class: 'panel' },
         h('h2', null, 'Your rides'),
-        h('p', { class: 'muted small' }, 'A new rank means a faster ride. Earn XP and tips to climb.'),
-        h('div', { class: 'ladder' }, S.meta.ranks.map((r, i) => {
-          const v = S.meta.vehicles[i];
-          const got = i <= rk.index;
-          return h('div', { class: 'rung' + (i === rk.index ? ' now' : '') + (got ? '' : ' lock') }, Art.vehicleSvg(v.id, got ? g : { paint: '#9aa1bd', helmet: 'none', sticker: 'none' }, 110), h('b', null, v.name), h('span', { class: 'small muted' }, got ? r.name : r.name + ' · ' + r.xp + ' XP'));
+        h('p', { class: 'muted small' }, 'Earn XP and tips to move up to a faster ride.'),
+        h('div', { class: 'ladder' }, me.rides.map((v, i) => {
+          const got = i <= cur.index;
+          return h('div', { class: 'rung' + (i === cur.index ? ' now' : '') + (got ? '' : ' lock') }, Art.vehicleSvg(v.id, got ? g : { paint: '#9aa1bd', helmet: 'none', sticker: 'none' }, 110), h('b', null, v.name), h('span', { class: 'small muted' }, i === cur.index ? 'Your ride' : got ? 'Unlocked' : v.xp + ' XP'));
         })),
       ),
       h('section', { class: 'panel' }, h('h2', null, 'Paint'), h('div', { class: 'swatches' }, C.paints.map((p) => swatch('paint', p, p.id === g.paintId)))),
@@ -1276,6 +1440,9 @@
   const orderPool = (x) => [...shuffle(x.filter((q) => q.status === 'new')), ...shuffle(x.filter((q) => q.status === 'wrong')), ...shuffle(x.filter((q) => q.status === 'done'))];
 
   async function startRoute({ kind, district = 0, mode = 0 }) {
+    const back = S.view === 'play' ? 'home' : S.view;
+    S.busy = 'Packing your parcels';
+    render();
     try {
       const cfg = S.meta.route || { len: 5, big: 6, rush: 6 };
       let qs;
@@ -1297,14 +1464,19 @@
       } else pool = kind === 'big' ? shuffle([...qs]) : orderPool(qs);
       pool = takeRound(pool, len);
       if (!pool.length) {
+        S.busy = '';
+        S.view = back;
         S.flash = 'There are no parcels here yet.';
         render();
         return;
       }
-      S.R = { kind, district, mode, list: pool, i: 0, practice: false, xp: 0, right: 0, results: [], combo: 0, bestCombo: 0, slips: 0, over: false, startedAt: Date.now(), t0: Date.now(), receipt: null, rankBefore: S.me.rank.index, levelBefore: S.me.level.level, before: S.me.districts };
+      S.busy = '';
+      S.R = { kind, district, mode, list: pool, i: 0, practice: false, xp: 0, right: 0, results: [], combo: 0, bestCombo: 0, slips: 0, over: false, startedAt: Date.now(), t0: Date.now(), receipt: null, rankBefore: S.me.rank.index, vehicleBefore: S.me.vehicle.index, levelBefore: S.me.level.level, before: S.me.districts };
       S.view = 'play';
       render();
     } catch (e) {
+      S.busy = '';
+      S.view = back;
       S.flash = e.message;
       render();
     }
@@ -1379,6 +1551,9 @@
       await loadMe();
     } catch {}
     R.busy = false;
+    const up = S.me.level.level > (R.levelBefore || 0) || S.me.rank.index > (R.rankBefore || 0) || S.me.vehicle.index > (R.vehicleBefore || 0);
+    const good = R.receipt && R.receipt.run && (R.receipt.run.passed || R.receipt.run.stars > 0);
+    Sfx.play(up ? 'levelup' : good ? 'done' : 'slip');
     render();
   }
 
@@ -1409,6 +1584,7 @@
     const wasOpen = new Set((R.before || []).filter((d) => d.unlocked).map((d) => d.n));
     const newlyOpen = me.districts.filter((d) => d.unlocked && !d.empty && !wasOpen.has(d.n));
     const rankUp = me.rank.index > (R.rankBefore || 0);
+    const rideUp = me.vehicle.index > (R.vehicleBefore || 0);
     const levelUp = me.level.level > (R.levelBefore || me.level.level);
     const costly = run.costlyRule;
     const home = (d) => me.districts.find((x) => x.n === d);
@@ -1429,7 +1605,8 @@
         newlyCleared.length ? h('div', { class: 'banner good' }, h('b', null, 'District cleared! '), newlyCleared.map((n) => distInfo(n).name).join(', ') + '.') : null,
         newlyOpen.length ? h('div', { class: 'banner' }, h('b', null, 'New in town: '), newlyOpen.map((d) => distInfo(d.n).name).join(', ') + ' is now open.') : null,
         levelUp ? h('div', { class: 'banner good' }, h('b', null, 'Level up! '), 'You’re level ' + me.level.level + ' now.') : null,
-        rankUp ? h('div', { class: 'banner good' }, h('b', null, 'New rank: ' + me.rank.name + '! '), 'You’ve got a ' + vehicleOf(me.rank).name.toLowerCase() + ' now.', h('span', { class: 'ride' }, myRide(90))) : null,
+        rankUp ? h('div', { class: 'banner good' }, h('b', null, 'New rank: ' + me.rank.name + '!')) : null,
+        rideUp ? h('div', { class: 'banner good' }, h('b', null, 'New ride! '), 'You’ve got a ' + me.vehicle.name.toLowerCase() + ' now.', h('span', { class: 'ride' }, myRide(90))) : null,
         costly && run.right < run.total + 1 && (R.slips || run.first < run.total) ? h('p', { class: 'small' }, 'Costliest rule this route: ', ruleChip(costly), ' ', home(costly) && home(costly).unlocked && !home(costly).empty ? h('button', { class: 'btn small alt', type: 'button', onclick: () => startRoute({ kind: 'route', district: costly }) }, 'Practise in ' + distInfo(costly).name) : null) : null,
         h('div', { class: 'actions' },
           canAgain ? h('button', { class: 'btn', type: 'button', onclick: () => startRoute({ kind: R.kind, district: R.district, mode: R.mode }) }, again) : null,
@@ -1444,42 +1621,80 @@
   // ---------- render ----------
   function render() {
     clearInterval(S.clockTimer);
+    const scrollY = window.scrollY || 0;
     root.replaceChildren();
-    if (!S.token || !S.me) {
-      root.append(authView());
+    document.body.classList.toggle('has-bottomnav', !!(S.token && S.me));
+    const playingNow = S.view === 'play' && !!S.R && S.R.i < S.R.list.length;
+    document.body.classList.toggle('playing', playingNow);
+    if (!S.token) {
+      const av = authView();
+      av.id = 'main';
+      root.append(av);
+      return;
+    }
+    if (!S.me) {
+      // signed in but the pupil's details have not loaded: show a loading screen, or a retry if it failed
+      root.append(h('div', { class: 'wrap', id: 'main', tabindex: '-1' }, S.bootError
+        ? UI.errorPanel({ title: 'Can’t reach Dash Express', message: S.bootError, onRetry: boot, retryLabel: 'Try again' })
+        : UI.skeleton(3, 'Loading your town')));
+      if (S.bootError) root.firstChild.append(h('p', null, h('button', { class: 'btn ghost small', type: 'button', onclick: () => signOut('') }, 'Sign out')));
       return;
     }
     const flash = S.flash;
     S.flash = '';
     root.append(...header());
     let view;
-    if (S.view === 'play' && S.R) view = playView();
+    if (S.busy) view = h('div', { class: 'wrap' }, h('h1', { class: 'sr-only', 'data-focus': '' }, S.busy), UI.skeleton(2, S.busy));
+    else if (S.view === 'play' && S.R) view = playView();
     else if (S.view === 'practice') view = practiceView();
     else if (S.view === 'depot') view = depotView();
     else if (S.view === 'garage') view = garageView();
     else if (S.view === 'rules') view = rulesView();
     else if (S.view === 'progress') view = progressView();
     else view = townView();
-    if (flash) view.prepend(h('div', { class: 'notice', role: 'status' }, flash));
+    view.id = 'main';
+    view.setAttribute('tabindex', '-1');
+    if (flash) {
+      view.prepend(h('div', { class: 'notice', role: 'status' }, flash));
+      UI.announce(flash);
+    }
     root.append(view);
-    if (S.view === 'play' && S.R && S.R.i < S.R.list.length) tickClock();
-    window.scrollTo(0, 0);
+    if (!playingNow) root.append(bottomNav());
+    if (S.view === 'play' && S.R && S.R.i < S.R.list.length && !S.busy) tickClock();
+    // New screen or new question: back to the top and into the content. Same screen again (a swatch, a toggle): stay put.
+    const key = S.view + ':' + (S.busy ? 'busy' : S.R ? S.R.i : '');
+    if (key !== S.renderKey) {
+      S.renderKey = key;
+      window.scrollTo(0, 0);
+      if (!S.busy) UI.focusMain(view);
+    } else window.scrollTo(0, scrollY);
   }
 
   // ---------- boot ----------
-  (async () => {
+  async function boot() {
+    S.bootError = '';
+    render();
     try {
       S.meta = await (await fetch('/api/meta')).json();
     } catch {
-      S.meta = { rules: {} };
+      S.meta = S.meta || { rules: {} };
     }
     if (S.token) {
       try {
         await loadMe();
-      } catch {
-        S.token = null;
+      } catch (e) {
+        // A real "please sign in again" has already signed the pupil out. Anything else (no signal, server hiccup)
+        // keeps them signed in and offers a retry instead.
+        if (S.token) S.bootError = e.message || 'Something went wrong.';
       }
     }
     render();
-  })();
+  }
+  UI.watchOnline('You’re offline. Your answers can’t be saved until you’re back online.');
+  trackKeyboard();
+  boot();
+  // Lets the app be installed and open offline. It never touches /api/ (see sw.js).
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  }
 })();

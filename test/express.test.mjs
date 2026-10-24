@@ -376,8 +376,8 @@ test('deleting or resetting a pupil removes their routes too', async () => {
 });
 
 test('/api/meta describes the town for the browser', async () => {
-  const body = await pupil.meta().json();
-  assert.equal(body.version, '1.4.0');
+  const body = await (await pupil.meta()).json();
+  assert.equal(body.version, '1.7.0');
   assert.equal(body.districts.length, 12);
   assert.equal(body.vehicles.length, body.ranks.length, 'one vehicle per rank');
   assert.ok(body.cosmetics.paints.length >= 6);

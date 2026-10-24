@@ -5,7 +5,7 @@
 // A question belongs to the district of its rule. A teacher can set that with data.rule (1-12); otherwise
 // autoRule() suggests one from the question itself.
 
-import { CODES } from './rules.js';
+import { CODES, RANKS } from './rules.js';
 
 export const DISTRICTS = [
   { n: 1, name: 'Speech Mark Street', rule: 1, blurb: 'Wrap the spoken words in speech marks, and nothing else.' },
@@ -22,6 +22,32 @@ export const DISTRICTS = [
   { n: 12, name: 'Customer Quarter', rule: 12, blurb: 'Read between the lines: what do actions and tone give away?' },
 ];
 export const DISTRICT_NUMS = DISTRICTS.map((d) => d.n);
+
+// ---------------------------------------------------------------------------------------------
+// Ranks and rides. Each has its own list of XP thresholds, which start out the same (so a new rank
+// still brings a new ride) but the admin can change either list on its own.
+// ---------------------------------------------------------------------------------------------
+export const DEFAULT_RANK_XP = RANKS.map((r) => r.xp);
+export const DEFAULT_VEHICLE_XP = RANKS.map((r) => r.xp);
+
+// Checks an admin-supplied list of thresholds: one whole number per rank (or ride), the first 0, each higher
+// than the one before.
+export function validateThresholds(input, count, what = 'rank') {
+  if (!Array.isArray(input) || input.length !== count) return { ok: false, error: `Give an XP amount for each of the ${count} ${what}s.` };
+  const xps = input.map((x) => (x === '' || x === null ? NaN : Number(x)));
+  if (xps.some((x) => !Number.isInteger(x) || x < 0 || x > 1_000_000)) return { ok: false, error: 'XP amounts must be whole numbers from 0 to 1,000,000.' };
+  if (xps[0] !== 0) return { ok: false, error: `The first ${what} always starts at 0 XP.` };
+  for (let i = 1; i < xps.length; i++) if (xps[i] <= xps[i - 1]) return { ok: false, error: `Each ${what} needs more XP than the one before it.` };
+  return { ok: true, xps };
+}
+
+// Which ride a pupil has, from the ride thresholds. Shaped like rankFor().
+export function vehicleFor(xp, xps = DEFAULT_VEHICLE_XP) {
+  let idx = 0;
+  for (let i = 0; i < VEHICLES.length; i++) if (xp >= xps[i]) idx = i;
+  const next = VEHICLES[idx + 1] ? { xp: xps[idx + 1], name: VEHICLES[idx + 1].name } : null;
+  return { index: idx, id: VEHICLES[idx].id, name: VEHICLES[idx].name, from: xps[idx], next: next ? next.xp : null, nextName: next ? next.name : null };
+}
 
 // ---------------------------------------------------------------------------------------------
 // Levels and what they unlock. A pupil's level comes from their total XP (answers + tips).

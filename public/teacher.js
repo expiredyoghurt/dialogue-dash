@@ -30,7 +30,7 @@
   const S = {
     token: store.get('dd_ttoken') || '',
     who: null,
-    tab: 'classes',
+    tab: 'dashboard',
     meta: null,
     classes: [],
     guests: 0,
@@ -43,11 +43,16 @@
   };
 
   async function api(path, { method = 'GET', body } = {}) {
-    const res = await fetch('/api/t' + path, {
-      method,
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + S.token },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    let res;
+    try {
+      res = await fetch('/api/t' + path, {
+        method,
+        headers: { 'content-type': 'application/json', authorization: 'Bearer ' + S.token },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch {
+      throw new Error('Can’t reach the server. Check the internet connection and try again.');
+    }
     let data = null;
     try { data = await res.json(); } catch {}
     if (res.status === 401) {
@@ -60,12 +65,10 @@
     return data;
   }
 
+  const UI = window.DashUI;
+  // Messages appear as a toast at the bottom of the screen: they don't push the page about, and errors stay longer.
   const flash = (m, bad) => {
-    const n = h('div', { class: 'notice' + (bad ? ' bad' : ''), role: 'status' }, m);
-    const box = document.getElementById('flash');
-    if (!box) return;
-    box.replaceChildren(n);
-    n.scrollIntoView({ block: 'nearest' });
+    UI.toast(m, { kind: bad ? 'error' : 'ok' });
   };
   const guard = (fn) => async (...a) => {
     try { await fn(...a); } catch (e) { flash(e.message, true); }
@@ -84,19 +87,30 @@
   function render() {
     if (!S.token) {
       S.who = null;
-      return app.replaceChildren(loginView());
+      const lv = loginView();
+      lv.id = 'main';
+      return app.replaceChildren(lv);
     }
     if (!S.who) {
       // who is signed in decides which tabs and buttons exist
-      api('/me').then((w) => { S.who = w; render(); }).catch(() => {});
-      return app.replaceChildren(h('div', { class: 'wrap' }, h('p', { class: 'muted' }, 'Loading…')));
+      api('/me').then((w) => { S.who = w; render(); }).catch((e) => {
+        if (S.token) app.replaceChildren(h('div', { class: 'wrap', id: 'main' }, UI.errorPanel({ title: 'Can’t open the console', message: e.message, onRetry: render }), h('p', null, h('button', { class: 'btn ghost small', type: 'button', onclick: () => { S.token = ''; store.del('dd_ttoken'); render(); } }, 'Sign out'))));
+      });
+      return app.replaceChildren(h('div', { class: 'wrap', id: 'main' }, UI.skeleton(2, 'Loading')));
     }
     const admin = S.who.admin;
     const tabs = admin
-      ? [['classes', 'Classes & pupils'], ['teachers', 'Teachers'], ['questions', 'Questions'], ['districts', 'Districts'], ['verbs', 'Verb bank'], ['analytics', 'Analytics']]
-      : [['classes', 'My classes'], ['questions', 'Questions'], ['districts', 'Districts'], ['verbs', 'Verb review'], ['analytics', 'Analytics']];
-    if (!tabs.some(([k]) => k === S.tab)) S.tab = 'classes';
-    const body = h('div', { class: 'wrap' }, h('div', { id: 'flash', 'aria-live': 'polite' }), h('div', { id: 'tab' }));
+      ? [['dashboard', 'Dashboard'], ['classes', 'Classes & pupils'], ['teachers', 'Teachers'], ['questions', 'Questions'], ['districts', 'Districts'], ['settings', 'Game settings'], ['verbs', 'Verb bank'], ['analytics', 'Analytics']]
+      : [['dashboard', 'Dashboard'], ['classes', 'My classes'], ['questions', 'Questions'], ['districts', 'Districts'], ['verbs', 'Verb review'], ['analytics', 'Analytics']];
+    if (!tabs.some(([k]) => k === S.tab)) S.tab = 'dashboard';
+    // Keep what is on screen while the same tab reloads, so the page doesn't flash empty or jump.
+    const prevTab = document.getElementById('tab');
+    const sameTab = S.lastTab === S.tab && prevTab && prevTab.childNodes.length > 0;
+    const scrollY = window.scrollY || 0;
+    const tabEl = h('div', { id: 'tab' });
+    if (sameTab) tabEl.append(...prevTab.childNodes);
+    else tabEl.append(UI.skeleton(2, 'Loading'));
+    const body = h('div', { class: 'wrap', id: 'main', tabindex: '-1' }, tabEl);
     app.replaceChildren(
       h('header', { class: 'topbar no-print' },
         h('div', { class: 'brand' }, h('span', { class: 'bubble-logo', 'aria-hidden': 'true' }, '“”'), 'Dash Express · Teacher'),
@@ -105,13 +119,34 @@
           admin ? null : h('button', { class: 'btn ghost small', type: 'button', onclick: passwordDialog }, 'Change password'),
           h('button', { class: 'btn ghost small', type: 'button', onclick: () => { S.token = ''; S.who = null; store.del('dd_ttoken'); render(); } }, 'Sign out'))),
       h('nav', { class: 'tabs no-print', 'aria-label': 'Sections' },
-        tabs.map(([k, l]) => h('button', { class: 'tab', type: 'button', 'aria-current': S.tab === k ? 'page' : false, onclick: () => { S.tab = k; render(); } }, l))),
+        tabs.map(([k, l]) => h('button', { class: 'tab', type: 'button', 'aria-current': S.tab === k ? 'page' : false, onclick: async () => {
+          if (S.dirty && k !== S.tab && !(await UI.confirm({ title: 'Leave without saving?', body: 'Your changes to the game settings haven’t been saved.', confirmLabel: 'Leave', cancelLabel: 'Stay' }))) return;
+          S.dirty = false;
+          S.tab = k;
+          render();
+        } }, l))),
       body,
     );
-    const view = { classes: classesView, teachers: teachersView, questions: questionsView, districts: districtsView, verbs: verbsView, analytics: analyticsView }[S.tab];
-    guard(async () => {
-      if (!S.meta) S.meta = await (await fetch('/api/meta')).json();
-      await view(document.getElementById('tab'));
+    const view = { dashboard: dashboardView, settings: gameSettingsView, classes: classesView, teachers: teachersView, questions: questionsView, districts: districtsView, verbs: verbsView, analytics: analyticsView }[S.tab];
+    S.lastTab = S.tab;
+    const mine = (S.rt = (S.rt || 0) + 1);
+    (async () => {
+      try {
+        if (!S.meta) S.meta = await (await fetch('/api/meta')).json();
+        await view(tabEl);
+      } catch (e) {
+        if (mine !== S.rt) return;
+        const msg = /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? 'Can’t reach the server. Check the internet connection and try again.' : e.message;
+        tabEl.replaceChildren(UI.errorPanel({ title: 'This page didn’t load', message: msg, onRetry: render }));
+        UI.toast(msg, { kind: 'error' });
+        return;
+      }
+      if (mine !== S.rt) return;
+      if (sameTab) window.scrollTo(0, scrollY);
+      else {
+        window.scrollTo(0, 0);
+        UI.focusMain(tabEl);
+      }
     })();
   }
 
@@ -196,7 +231,7 @@
       h('td', null,
         h('button', { class: 'btn small alt', type: 'button', onclick: () => { S.editT = S.editT === t.id ? null : t.id; teachersView(root); } }, 'Classes'),
         h('button', { class: 'btn small alt', type: 'button', onclick: guard(async () => {
-          if (!confirm('Make a new password for ' + t.name + '? They will be signed out.')) return;
+          if (!(await UI.confirm({ title: 'Make a new password?', body: t.name + ' will be signed out. You will see the new password once.', confirmLabel: 'Make new password' }))) return;
           const r = await api(`/teachers/${t.id}/reset-password`, { method: 'POST' });
           document.getElementById('tshown').replaceChildren(secret('New password.', t.name + ' (' + t.username + ').', r.password));
         }) }, 'New password'),
@@ -205,7 +240,7 @@
           teachersView(root);
         }) }, t.active ? 'Switch off' : 'Switch on'),
         h('button', { class: 'btn small danger', type: 'button', onclick: guard(async () => {
-          if (!confirm('Delete the account for ' + t.name + '? Their classes stay as they are.')) return;
+          if (!(await UI.confirm({ title: 'Delete this teacher account?', body: t.name + ' (' + t.username + ') will be removed. Their classes and pupils stay, but nobody owns those classes any more.', confirmLabel: 'Delete account', danger: true }))) return;
           await api('/teachers/' + t.id, { method: 'DELETE' });
           teachersView(root);
         }) }, 'Delete'))));
@@ -249,7 +284,123 @@
     return { el, get: () => boxes.filter((b) => b.box.checked).map((b) => b.c.id) };
   }
 
-  // ---------- XP per level (admin) ----------
+  // ---------- small helpers for the new screens ----------
+  const ago = (t) => {
+    if (!t) return 'never';
+    const d = Math.floor((Date.now() - t) / 86_400_000);
+    return d <= 0 ? 'today' : d === 1 ? 'yesterday' : d + ' days ago';
+  };
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const svgEl = (tag, attrs, ...kids) => {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+    for (const k of kids.flat()) if (k) e.append(k);
+    return e;
+  };
+  const fmtN = (n) => Number(n).toLocaleString('en-SG');
+  const dShort = (n) => ((((S.meta && S.meta.districts) || []).find((d) => d.n === n) || {}).name) || 'District ' + n;
+  const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+
+  // ---------- class dashboard (the landing page) ----------
+  async function dashboardView(root) {
+    const classes = (await api('/classes')).classes.filter((c) => !c.archived);
+    S.classes = classes;
+    if (!classes.length) {
+      return root.replaceChildren(h('section', { class: 'panel' }, h('h2', null, 'Dashboard'), h('p', { class: 'muted' }, S.who.admin ? 'Add a class on the Classes tab to see how it is getting on.' : 'You don’t have any classes yet. Add one on the My classes tab.'), h('button', { class: 'btn', type: 'button', onclick: () => { S.tab = 'classes'; render(); } }, S.who.admin ? 'Go to Classes' : 'Go to My classes')));
+    }
+    if (!classes.some((c) => c.id === S.dashClass)) S.dashClass = classes[0].id;
+    const d = await api('/dashboard?class=' + S.dashClass);
+    const T = d.totals;
+    const tile = (n, label, sub) => h('div', { class: 'stat tile' }, h('b', null, String(n)), label, sub ? h('small', { class: 'muted' }, sub) : null);
+    const bar = (n, max, cls) => h('div', { class: 'hbar' }, h('i', { class: cls || '', style: 'width:' + (max ? Math.max(n ? 3 : 0, Math.round((100 * n) / max)) : 0) + '%' }));
+    const lv = d.pupils.reduce((a, p) => { a[p.level >= 20 ? 2 : p.level >= 10 ? 1 : 0]++; return a; }, [0, 0, 0]);
+    const manual = d.manual || [];
+    const sorts = { name: (a, b) => a.name.localeCompare(b.name), level: (a, b) => b.level - a.level || b.xp - a.xp, recent: (a, b) => (b.lastActive || 0) - (a.lastActive || 0), week: (a, b) => b.xp7 - a.xp7 };
+    const rows = h('tbody');
+    const sortSel = h('select', { 'aria-label': 'Sort pupils by', onchange: (e) => { S.dashSort = e.target.value; draw(); } },
+      [['name', 'Name'], ['level', 'Highest level'], ['recent', 'Played most recently'], ['week', 'Most XP this week']].map(([v, l]) => h('option', { value: v, selected: (S.dashSort || 'name') === v }, l)));
+    const draw = () => rows.replaceChildren(...[...d.pupils].sort(sorts[S.dashSort || 'name']).map((p) => h('tr', null,
+      h('td', null, h('b', null, p.name), h('div', { class: 'small muted' }, p.username)),
+      h('td', null, 'Level ' + p.level, h('div', { class: 'small muted' }, p.rank)),
+      h('td', null, fmtN(p.xp7) + ' XP', h('div', { class: 'small muted' }, plural(p.routes7, 'route', 'routes'))),
+      h('td', null, ago(p.lastActive)),
+      h('td', null, p.topSlip && p.topSlip.n >= 3 ? [h('b', null, dShort(p.topSlip.rule)), h('div', { class: 'small muted' }, plural(p.topSlip.n, 'slip', 'slips') + ' lately')] : h('span', { class: 'muted small' }, '—')))));
+    draw();
+    const maxRule = d.rules.length ? d.rules[0].misses : 1;
+    root.replaceChildren(
+      h('section', { class: 'panel' },
+        h('div', { class: 'row', style: 'align-items:center;gap:12px;flex-wrap:wrap' },
+          h('h2', { class: 'grow', style: 'margin:0' }, 'Dashboard'),
+          h('label', { class: 'small', style: 'display:flex;gap:8px;align-items:center' }, 'Class',
+            h('select', { 'aria-label': 'Class', onchange: (e) => { S.dashClass = +e.target.value; render(); } }, classes.map((c) => h('option', { value: String(c.id), selected: c.id === S.dashClass }, c.name)))),
+          h('button', { class: 'btn small alt no-print', type: 'button', onclick: () => window.print() }, 'Print')),
+        h('p', { class: 'muted small', style: 'margin:6px 0 0' }, 'The last 7 days. Pupil results update as they play.'),
+        h('div', { class: 'statgrid', style: 'margin-top:12px' },
+          tile(T.pupils, T.pupils === 1 ? 'pupil' : 'pupils'),
+          tile(T.active7 + ' of ' + T.pupils, 'played this week', T.quiet7 ? plural(T.quiet7, 'pupil', 'pupils') + ' quiet' : 'everyone played'),
+          tile(fmtN(T.xp7), 'XP this week'),
+          tile(T.routes7, T.routes7 === 1 ? 'route finished' : 'routes finished'))),
+      h('section', { class: 'panel' },
+        h('h2', null, 'Where the class is'),
+        h('div', { class: 'levelbars' },
+          [['Levels 1 to 9', lv[0], 'Districts 1–3'], ['Levels 10 to 19', lv[1], 'Districts 4–6 open'], ['Level 20 and up', lv[2], 'Every district open']].map(([label, n, note]) =>
+            h('div', { class: 'lrow' }, h('span', { class: 'lname' }, label), bar(n, Math.max(1, T.pupils), 'lv'), h('b', null, String(n)), h('span', { class: 'small muted' }, note)))),
+        h('p', { class: 'small', style: 'margin:10px 0 0' },
+          plural(d.reach[10], 'pupil has', 'pupils have') + ' reached level 10 (' + fmtN((d.tierXp.find((t) => t.level === 10) || {}).xp) + ' XP) and ' + plural(d.reach[20], 'has', 'have') + ' reached level 20.',
+          manual.length ? ' You have opened ' + manual.map(dShort).join(', ') + ' for this class by hand.' : ' Nothing is opened by hand for this class.'),
+        h('button', { class: 'btn small alt', type: 'button', style: 'margin-top:10px', onclick: () => { S.tab = 'districts'; render(); } }, 'Open districts for this class')),
+      h('div', { class: 'twocol' },
+        h('section', { class: 'panel' },
+          h('h2', null, 'Needs a nudge'),
+          d.stuck.length ? h('ul', { class: 'plain' }, d.stuck.map((s) => h('li', null, h('b', null, s.name), ' keeps slipping on ', h('b', null, dShort(s.rule)), ' (' + plural(s.n, 'slip', 'slips') + ' in two weeks).'))) : h('p', { class: 'muted small' }, 'Nobody is stuck on one rule right now.'),
+          d.quiet.length ? [h('h3', { style: 'margin:14px 0 4px' }, 'Haven’t played this week'), h('p', { class: 'small', style: 'margin:0' }, d.quiet.map((q) => q.name + (q.lastActive ? ' (' + ago(q.lastActive) + ')' : ' (never)')).join(', '))] : null),
+        h('section', { class: 'panel' },
+          h('h2', null, 'Most missed, last two weeks'),
+          d.rules.length ? h('div', { class: 'levelbars' }, d.rules.map((r) => h('div', { class: 'lrow' }, h('span', { class: 'lname' }, dShort(r.rule)), bar(r.misses, maxRule, 'miss'), h('b', null, String(r.misses)), h('span', { class: 'small muted' }, plural(r.pupils, 'pupil', 'pupils'))))) : h('p', { class: 'muted small' }, 'No first-try slips recorded yet.'))),
+      h('section', { class: 'panel' },
+        h('div', { class: 'row', style: 'align-items:center;gap:12px;flex-wrap:wrap' }, h('h2', { class: 'grow', style: 'margin:0' }, 'Pupils'), h('label', { class: 'small no-print', style: 'display:flex;gap:8px;align-items:center' }, 'Sort by', sortSel)),
+        d.pupils.length ? h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Pupil', 'Level', 'This week', 'Last played', 'Slips on'].map((t) => h('th', null, t)))), rows)) : h('p', { class: 'muted' }, 'No pupils in this class yet. Add them on the Classes tab.')));
+  }
+
+  // ---------- unlock grid: every class against every district ----------
+  async function unlockGridPanel() {
+    const g = await api('/unlock-grid');
+    const D = (S.meta && S.meta.districts) || [];
+    if (!g.classes.length) return h('section', { class: 'panel' }, h('h2', null, 'Open districts for your classes'), h('p', { class: 'muted' }, 'Add a class on the Classes tab first.'));
+    const save = async (c, set) => {
+      try {
+        await api(`/classes/${c.id}/unlocks`, { method: 'PUT', body: { unlocked: [...set].sort((a, b) => a - b) } });
+        flash('Saved for ' + c.name + '.');
+      } catch (e) {
+        flash(e.message, true);
+      }
+    };
+    const tierLabel = (t) => (t.level === 1 ? 'Open from the start' : `Level ${t.level} (${fmtN((g.tierXp.find((x) => x.level === t.level) || {}).xp)} XP)`);
+    const head1 = h('tr', null, h('th', { rowspan: '2', scope: 'col' }, 'Class'), g.tiers.map((t) => h('th', { colspan: String(t.districts.length), scope: 'colgroup', class: 'tiercol' }, tierLabel(t))), h('th', { rowspan: '2', scope: 'col' }, ''));
+    const head2 = h('tr', null, g.tiers.flatMap((t) => t.districts.map((n) => h('th', { scope: 'col', title: dShort(n), class: 'dcol' }, String(n)))));
+    const rows = g.classes.map((c) => {
+      const set = new Set(c.unlocked);
+      const boxes = new Map();
+      const cells = g.tiers.flatMap((t) => t.districts.map((n) => {
+        if (t.level === 1) return h('td', { class: 'dcell on', title: dShort(n) + ' is open from level 1' }, h('span', { 'aria-label': dShort(n) + ' is always open' }, '✓'));
+        const b = h('input', { type: 'checkbox', checked: set.has(n), 'aria-label': `Open ${dShort(n)} for ${c.name}`, onchange: () => { if (b.checked) set.add(n); else set.delete(n); save(c, set); } });
+        boxes.set(n, b);
+        return h('td', { class: 'dcell' }, b);
+      }));
+      const setAll = (v) => { for (const [n, b] of boxes) { b.checked = v; if (v) set.add(n); else set.delete(n); } save(c, set); };
+      return h('tr', null,
+        h('th', { scope: 'row' }, h('b', null, c.name), h('div', { class: 'small muted' }, plural(c.pupils, 'pupil', 'pupils') + ' · ' + c.reached[10] + ' at level 10+ · ' + c.reached[20] + ' at 20+')),
+        cells,
+        h('td', { class: 'nowrap' }, h('button', { class: 'btn small alt', type: 'button', onclick: () => setAll(true) }, 'Open all'), h('button', { class: 'btn small ghost', type: 'button', onclick: () => setAll(false) }, 'Levels only')));
+    });
+    return h('section', { class: 'panel' },
+      h('h2', null, 'Open districts for your classes'),
+      h('p', { class: 'muted small' }, 'Districts 1–3 are open for everyone. A tick opens a district for the whole class now, whatever their level; without a tick it opens as each pupil reaches the level. Changes save as you tick.'),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl gridtbl' }, h('thead', null, head1, head2), h('tbody', null, rows))),
+      h('details', { style: 'margin-top:10px' }, h('summary', null, 'Which district is which?'), h('ol', { class: 'small', style: 'columns:2;margin:8px 0 0' }, D.map((d) => h('li', { value: String(d.n) }, d.name)))));
+  }
+
+  // ---------- game settings (admin): one draft, a live preview, one save ----------
   const xpForLevelC = (level, bands) => {
     let xp = 0;
     let at = 1;
@@ -262,94 +413,178 @@
     }
     return xp;
   };
-  function levelsPanel(st) {
-    const fmt = (n) => Number(n).toLocaleString('en-SG');
-    let rows = st.levelBands.map((b) => ({ upTo: b.upTo, xp: b.xp }));
-    const host = h('div');
-    const prevEl = h('p', { class: 'small', style: 'margin:8px 0 0', 'aria-live': 'polite' });
-    const tiers = (S.meta.levels && S.meta.levels.tiers ? S.meta.levels.tiers : []).filter((t) => t.level > 1);
-    const draw = () => {
+  const risingOk = (list) => list.length > 0 && list[0] === 0 && list.every((x, i) => Number.isInteger(x) && (i === 0 || x > list[i - 1]));
+  const bandsOk = (rows) => rows.length > 0 && rows.every((r, i) => Number.isInteger(r.xp) && r.xp >= 1 && (i === rows.length - 1 ? true : Number.isInteger(r.upTo) && r.upTo > (i ? rows[i - 1].upTo : 1)));
+
+  // A line chart of XP against level: grey is what is saved, blue is the draft.
+  function levelChart(saved, draft) {
+    const W = 600;
+    const H = 190;
+    const L = 46;
+    const B = 28;
+    const MAXL = 50;
+    const pts = (bands) => Array.from({ length: MAXL }, (_, i) => xpForLevelC(i + 1, bands));
+    const a = pts(saved);
+    const b = bandsOk(draft) ? pts(draft) : a;
+    const top = Math.max(a[MAXL - 1], b[MAXL - 1], 1);
+    const x = (lvl) => L + ((lvl - 1) / (MAXL - 1)) * (W - L - 10);
+    const y = (xp) => H - B - (xp / top) * (H - B - 10);
+    const line = (arr, attrs) => svgEl('polyline', { fill: 'none', 'stroke-width': 3, 'stroke-linejoin': 'round', points: arr.map((v, i) => x(i + 1).toFixed(1) + ',' + y(v).toFixed(1)).join(' '), ...attrs });
+    const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'lvchart', role: 'img', 'aria-label': `XP needed for each level. Level 10 at ${fmtN(b[9])} XP, level 20 at ${fmtN(b[19])} XP, level 50 at ${fmtN(b[49])} XP.` },
+      [0, 0.5, 1].map((f) => svgEl('line', { x1: L, x2: W - 10, y1: y(top * f), y2: y(top * f), stroke: 'currentColor', 'stroke-opacity': '0.15' })),
+      [10, 20].map((lvl) => svgEl('line', { x1: x(lvl), x2: x(lvl), y1: 10, y2: H - B, stroke: 'currentColor', 'stroke-opacity': '0.35', 'stroke-dasharray': '4 4' })),
+      line(a, { stroke: '#9aa1bd', 'stroke-dasharray': '2 5' }),
+      line(b, { stroke: '#2c68e0' }),
+      [1, 10, 20, 30, 40, 50].map((lvl) => { const t = svgEl('text', { x: x(lvl), y: H - 8, 'text-anchor': 'middle', 'font-size': '12', fill: 'currentColor' }); t.textContent = lvl === 1 ? 'L1' : String(lvl); return t; }),
+      [0, 0.5, 1].map((f) => { const t = svgEl('text', { x: L - 6, y: y(top * f) + 4, 'text-anchor': 'end', 'font-size': '11', fill: 'currentColor' }); t.textContent = fmtN(Math.round(top * f)); return t; }),
+    );
+    return svg;
+  }
+
+  async function gameSettingsView(root) {
+    const st = await api('/settings');
+    const clone = (o) => JSON.parse(JSON.stringify(o));
+    const base = { clock: st.clock, openDistricts: st.openDistricts, levelBands: clone(st.levelBands), rankXp: [...st.rankXp], vehicleXp: [...st.vehicleXp] };
+    const draft = clone(base);
+    const dflt = st.defaults;
+    const rankNames = st.ranks.map((r) => r.name);
+    const rideNames = st.vehicles.map((v) => v.name);
+    const dirty = () => JSON.stringify(draft) !== JSON.stringify(base);
+    const valid = () => bandsOk(draft.levelBands) && risingOk(draft.rankXp) && risingOk(draft.vehicleXp);
+    const bandsHost = h('div');
+    const chartHost = h('div');
+    const impact = h('div', { class: 'impact', 'aria-live': 'polite' });
+    const ranksHost = h('div');
+    const bar = h('div', { class: 'savebar', hidden: true, role: 'region', 'aria-label': 'Unsaved changes' });
+    let timer = null;
+    let seq = 0;
+
+    const drawBands = () => {
       let prev = 1;
-      const lines = rows.map((r, i) => {
-        const last = i === rows.length - 1;
+      const lines = draft.levelBands.map((r, i) => {
+        const last = i === draft.levelBands.length - 1;
         const from = prev + 1;
-        const upIn = last ? null : h('input', { type: 'number', min: String(from), max: '1000', value: String(r.upTo), style: 'width:5.5em', 'aria-label': 'Last level in range ' + (i + 1), oninput: (e) => { r.upTo = +e.target.value; preview(); } });
-        const xpIn = h('input', { type: 'number', min: '1', max: '100000', value: String(r.xp), style: 'width:6.5em', 'aria-label': 'XP per level in range ' + (i + 1), oninput: (e) => { r.xp = +e.target.value; preview(); } });
-        if (!last) prev = r.upTo;
+        const upIn = last ? null : h('input', { type: 'number', min: String(from), max: '1000', value: String(r.upTo), style: 'width:5.5em', 'aria-label': 'Last level in range ' + (i + 1), oninput: (e) => { r.upTo = e.target.value === '' ? NaN : +e.target.value; changed(); } });
+        const xpIn = h('input', { type: 'number', min: '1', max: '100000', value: String(r.xp), style: 'width:6.5em', 'aria-label': 'XP per level in range ' + (i + 1), oninput: (e) => { r.xp = e.target.value === '' ? NaN : +e.target.value; changed(); } });
+        if (!last) prev = Number.isInteger(r.upTo) ? r.upTo : prev;
         return h('tr', null,
           h('td', null, last ? `Level ${from} onwards` : [`Levels ${from} to `, upIn]),
           h('td', null, xpIn, ' XP per level'),
-          h('td', null, rows.length > 1 ? h('button', { class: 'btn small ghost', type: 'button', onclick: () => { if (last) { rows.splice(i, 1); rows[rows.length - 1].upTo = null; } else rows.splice(i, 1); draw(); } }, 'Remove') : null));
+          h('td', null, draft.levelBands.length > 1 ? h('button', { class: 'btn small ghost', type: 'button', 'aria-label': 'Remove range ' + (i + 1), onclick: () => { draft.levelBands.splice(i, 1); draft.levelBands[draft.levelBands.length - 1].upTo = null; drawBands(); changed(); } }, 'Remove') : null));
       });
-      host.replaceChildren(h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Levels', 'Cost', ''].map((t) => h('th', null, t)))), h('tbody', null, lines))), prevEl);
-      preview();
+      bandsHost.replaceChildren(
+        h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Levels', 'Cost', ''].map((t) => h('th', null, t)))), h('tbody', null, lines))),
+        h('div', { class: 'row', style: 'gap:8px;margin-top:8px' },
+          h('button', { class: 'btn small alt', type: 'button', onclick: () => { if (draft.levelBands.length >= 8) return flash('That is the most ranges you can have.', true); const b = draft.levelBands; const before = b.length > 1 ? b[b.length - 2].upTo : 1; b.splice(b.length - 1, 0, { upTo: before + 10, xp: b[b.length - 1].xp }); drawBands(); changed(); } }, 'Add a range'),
+          h('button', { class: 'btn small ghost', type: 'button', onclick: () => { draft.levelBands = clone(dflt.levelBands); drawBands(); changed(); } }, 'Standard amounts')));
     };
-    const preview = () => {
-      const el = prevEl;
-      const ok = rows.every((r, i) => (i === rows.length - 1 ? r.xp >= 1 : r.upTo > (i ? rows[i - 1].upTo : 1) && r.xp >= 1));
-      el.textContent = ok ? tiers.map((t) => `Level ${t.level} is reached at ${fmt(xpForLevelC(t.level, rows))} XP`).join(' · ') + ' · Level 1 is free.' : 'Each range must end at a higher level than the one before.';
+    const drawRanks = () => {
+      const table = (title, names, key, hint) => h('div', null,
+        h('h3', { style: 'margin:0 0 4px' }, title), h('p', { class: 'muted small', style: 'margin:0 0 6px' }, hint),
+        h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['', 'XP needed'].map((t) => h('th', null, t)))), h('tbody', null, names.map((n, i) => h('tr', null,
+          h('td', null, h('b', null, n)),
+          h('td', null, h('input', { type: 'number', min: '0', max: '1000000', value: String(draft[key][i]), disabled: i === 0, style: 'width:7.5em', 'aria-label': 'XP for ' + n, oninput: (e) => { draft[key][i] = e.target.value === '' ? NaN : +e.target.value; changed(); } }), i === 0 ? h('span', { class: 'muted small' }, '  always 0') : null)))))),
+        h('button', { class: 'btn small ghost', type: 'button', style: 'margin-top:6px', onclick: () => { draft[key] = [...dflt[key]]; drawRanks(); changed(); } }, 'Standard amounts'));
+      ranksHost.replaceChildren(h('div', { class: 'twocol' }, table('Ranks', rankNames, 'rankXp', 'The title shown next to a pupil’s name.'), table('Delivery vehicles', rideNames, 'vehicleXp', 'Set separately from ranks, so a new ride can arrive at a different time from a new rank.')));
     };
-    draw();
-    const wrap = (r) => r.map((x, i) => ({ upTo: i === r.length - 1 ? null : x.upTo, xp: x.xp }));
-    return h('section', { class: 'panel' },
-      h('h2', null, 'XP per level'),
-      h('p', { class: 'muted small' }, 'Level 1 is free. Every later level costs the XP of the range it falls in. Districts open at level 10 and level 20 whatever these numbers are. Changing them changes every pupil’s level straight away, so some districts may lock or unlock.'),
-      host,
-      h('div', { class: 'row', style: 'gap:8px;margin-top:10px;flex-wrap:wrap' },
-        h('button', { class: 'btn small alt', type: 'button', onclick: () => { if (rows.length >= 8) return flash('That is the most ranges you can have.', true); const last = rows[rows.length - 1]; const before = rows.length > 1 ? rows[rows.length - 2].upTo : 1; rows.splice(rows.length - 1, 0, { upTo: before + 10, xp: last.xp }); draw(); } }, 'Add a range'),
-        h('button', { class: 'btn', type: 'button', onclick: guard(async () => {
-          if (!confirm('Save these XP-per-level amounts? Every pupil’s level changes straight away.')) return;
-          const r = await api('/settings', { method: 'PUT', body: { levelBands: wrap(rows) } });
-          flash('Saved. ' + r.tierXp.map((t) => `Level ${t.level} is at ${fmt(t.xp)} XP`).join(', ') + '.');
-          render();
-        }) }, 'Save'),
-        h('button', { class: 'btn ghost', type: 'button', onclick: guard(async () => {
-          if (!confirm('Go back to the standard amounts (50, 75, 100, 150, then 200 XP per level)?')) return;
-          await api('/settings', { method: 'PUT', body: { levelBands: null } });
-          flash('Back to the standard amounts.');
-          render();
-        }) }, 'Reset to the standard amounts'),
-        st.levelBandsCustom ? h('span', { class: 'pill warn' }, 'customised') : h('span', { class: 'pill' }, 'standard')));
+
+    const impactLines = (r) => {
+      const out = [];
+      const mv = (n, what, dir) => (n ? out.push(h('li', null, plural(n, 'pupil', 'pupils') + ' ' + what)) : null);
+      mv(r.level.up, 'would go up a level or more'); mv(r.level.down, 'would drop a level or more');
+      mv(r.lose[4], 'would lose districts 4–6 (they’d be below level 10)'); mv(r.lose[7], 'would lose districts 7–12 (below level 20)');
+      mv(r.gain[4], 'would gain districts 4–6'); mv(r.gain[7], 'would gain districts 7–12');
+      mv(r.rank.up, 'would reach a higher rank'); mv(r.rank.down, 'would have a lower rank');
+      mv(r.ride.up, 'would get a faster ride'); mv(r.ride.down, 'would have a slower ride');
+      return out;
+    };
+    let lastImpact = null;
+    const runPreview = async () => {
+      const mine = ++seq;
+      const changedKeys = {};
+      if (JSON.stringify(draft.levelBands) !== JSON.stringify(base.levelBands)) changedKeys.levelBands = draft.levelBands;
+      if (JSON.stringify(draft.rankXp) !== JSON.stringify(base.rankXp)) changedKeys.rankXp = draft.rankXp;
+      if (JSON.stringify(draft.vehicleXp) !== JSON.stringify(base.vehicleXp)) changedKeys.vehicleXp = draft.vehicleXp;
+      if (!Object.keys(changedKeys).length) { lastImpact = null; impact.replaceChildren(h('p', { class: 'muted small', style: 'margin:0' }, 'Change a number to see what it would do to your pupils.')); return; }
+      try {
+        const r = await api('/settings/preview', { method: 'POST', body: changedKeys });
+        if (mine !== seq) return;
+        lastImpact = r;
+        const lines = impactLines(r);
+        impact.replaceChildren(
+          h('h3', { style: 'margin:0 0 4px' }, 'What this would do'),
+          lines.length ? h('ul', { class: 'plain' }, lines) : h('p', { class: 'small', style: 'margin:0' }, `None of your ${plural(r.pupils, 'pupil', 'pupils')} would change.`),
+          r.sample.length ? h('p', { class: 'small muted', style: 'margin:6px 0 0' }, 'For example: ' + r.sample.map((s) => `${s.name} (${s.className}) level ${s.from.level} to ${s.to.level}`).join('; ') + '.') : null);
+      } catch (e) {
+        if (mine === seq) impact.replaceChildren(h('p', { class: 'small', style: 'margin:0;color:var(--bad)' }, e.message));
+      }
+    };
+    const drawBar = () => {
+      const d = dirty();
+      S.dirty = d;
+      bar.hidden = !d;
+      bar.replaceChildren(
+        h('span', { class: 'grow' }, valid() ? 'You have unsaved changes.' : 'Fix the highlighted numbers before saving: each one must be higher than the one before.'),
+        h('button', { class: 'btn alt', type: 'button', onclick: () => { Object.assign(draft, clone(base)); drawAll(); } }, 'Discard'),
+        h('button', { class: 'btn', type: 'button', disabled: !valid(), onclick: guard(saveAll) }, 'Save changes'));
+    };
+    const changed = () => {
+      chartHost.replaceChildren(levelChart(base.levelBands, draft.levelBands), h('p', { class: 'small muted', style: 'margin:4px 0 0' }, 'Grey dotted: saved. Blue: this draft. Dashed lines mark levels 10 and 20.'));
+      const ok = bandsOk(draft.levelBands) ? `Level 10 at ${fmtN(xpForLevelC(10, draft.levelBands))} XP · level 20 at ${fmtN(xpForLevelC(20, draft.levelBands))} XP · level 30 at ${fmtN(xpForLevelC(30, draft.levelBands))} XP` : 'Each range must end at a higher level than the one before it.';
+      chartHost.append(h('p', { class: 'small', style: 'margin:4px 0 0' }, ok));
+      drawBar();
+      clearTimeout(timer);
+      if (valid() && dirty()) timer = setTimeout(runPreview, 350);
+      else if (!dirty()) runPreview();
+      else impact.replaceChildren(h('p', { class: 'muted small', style: 'margin:0' }, 'The preview appears once every number is valid.'));
+    };
+    const drawAll = () => {
+      drawBands();
+      drawRanks();
+      for (const [k, el] of switches) el.checked = !!draft[k];
+      changed();
+    };
+    const saveAll = async () => {
+      const body = {};
+      if (draft.clock !== base.clock) body.clock = draft.clock;
+      if (draft.openDistricts !== base.openDistricts) body.openDistricts = draft.openDistricts;
+      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+      if (!same(draft.levelBands, base.levelBands)) body.levelBands = same(draft.levelBands, dflt.levelBands) ? null : draft.levelBands;
+      if (!same(draft.rankXp, base.rankXp)) body.rankXp = same(draft.rankXp, dflt.rankXp) ? null : draft.rankXp;
+      if (!same(draft.vehicleXp, base.vehicleXp)) body.vehicleXp = same(draft.vehicleXp, dflt.vehicleXp) ? null : draft.vehicleXp;
+      const lines = lastImpact ? impactLines(lastImpact).map((li) => li.textContent) : [];
+      const ok = await UI.confirm({ title: 'Save these changes?', body: (lines.length ? 'This changes things for your pupils straight away:\n' + lines.map((l) => '• ' + l).join('\n') : 'This takes effect straight away.'), confirmLabel: 'Save changes' });
+      if (!ok) return;
+      await api('/settings', { method: 'PUT', body });
+      S.dirty = false;
+      flash('Saved. Pupils see the change straight away.');
+      render();
+    };
+    const switches = new Map();
+    const sw = (key, label, hint) => {
+      const input = h('input', { type: 'checkbox', checked: !!draft[key], onchange: (e) => { draft[key] = e.target.checked; changed(); } });
+      switches.set(key, input);
+      return h('label', { class: 'field' }, h('span', null, input, ' ' + label), h('small', { class: 'muted' }, hint));
+    };
+    root.replaceChildren(
+      h('section', { class: 'panel' },
+        h('h2', null, 'Game settings'),
+        h('p', { class: 'muted small' }, 'Changes stay in a draft until you press Save at the bottom. The preview shows what each change would do to your pupils.'),
+        sw('clock', 'Show the delivery clock and pay a speed bonus', 'A gentle, route-wide timer. It never ends a route. Turn it off to remove timing completely.'),
+        sw('openDistricts', 'Open every district for everyone', 'Ignores levels and class unlocks: every district is open to every pupil, and Rush Hour is open from the start. Use it for testing.')),
+      h('section', { class: 'panel' },
+        h('h2', null, 'XP per level'),
+        h('p', { class: 'muted small' }, 'Level 1 is free. Every later level costs the XP of the range it falls in. Districts 4–6 open at level 10 and 7–12 at level 20, whatever these numbers are.'),
+        h('div', { class: 'twocol' }, bandsHost, chartHost)),
+      h('section', { class: 'panel' },
+        h('h2', null, 'XP for ranks and vehicles'),
+        h('p', { class: 'muted small' }, 'The total XP (answers plus tips) at which a pupil reaches each rank or gets each ride. The first is always 0 and each must be higher than the one above. Paint, helmets and stickers have their own fixed XP.'),
+        ranksHost),
+      h('section', { class: 'panel' }, impact),
+      bar);
+    drawAll();
   }
 
-  // ---------- opening districts by hand for a class ----------
-  async function unlockPanel() {
-    const classes = (await api('/classes')).classes.filter((c) => !c.archived);
-    S.classes = classes;
-    if (!classes.length) return h('section', { class: 'panel' }, h('h2', null, 'Open districts for a class'), h('p', { class: 'muted' }, 'Add a class on the Classes tab first.'));
-    if (!classes.some((c) => c.id === S.unlockClass)) S.unlockClass = classes[0].id;
-    const cur = await api(`/classes/${S.unlockClass}/unlocks`);
-    const D = (S.meta && S.meta.districts) || [];
-    const tiers = cur.tiers;
-    const on = new Set(cur.unlocked);
-    const boxes = new Map();
-    const box = (n) => {
-      const b = h('input', { type: 'checkbox', checked: on.has(n) });
-      boxes.set(n, b);
-      return h('label', { class: 'small', style: 'display:flex;gap:6px;align-items:center' }, b, ((D.find((d) => d.n === n) || {}).name) || 'District ' + n);
-    };
-    const setAll = (list, v) => list.forEach((n) => { boxes.get(n).checked = v; });
-    const save = guard(async () => {
-      await api(`/classes/${S.unlockClass}/unlocks`, { method: 'PUT', body: { unlocked: [...boxes].filter(([, b]) => b.checked).map(([n]) => n) } });
-      flash('Saved. Pupils in this class see the change straight away.');
-    });
-    return h('section', { class: 'panel' },
-      h('h2', null, 'Open districts for a class'),
-      h('p', { class: 'muted small' }, 'Pupils open districts as they level up. Tick a district here to open it for the whole class now, whatever their level. Unticked districts still open as pupils reach the level.'),
-      h('label', { class: 'field', style: 'max-width:320px' }, h('span', null, 'Class'),
-        h('select', { onchange: (e) => { S.unlockClass = +e.target.value; render(); } }, classes.map((c) => h('option', { value: String(c.id), selected: c.id === S.unlockClass }, c.name)))),
-      tiers.map((t) => h('div', { style: 'margin:12px 0' },
-        h('div', { class: 'row', style: 'align-items:center;gap:10px;flex-wrap:wrap' },
-          h('b', null, t.level === 1 ? 'Open from the start' : `Opens at level ${t.level} (${(cur.tierXp.find((x) => x.level === t.level) || {}).xp} XP)`),
-          h('button', { class: 'btn small alt', type: 'button', onclick: () => setAll(t.districts, true) }, 'Open all of these'),
-          h('button', { class: 'btn small ghost', type: 'button', onclick: () => setAll(t.districts, false) }, 'Clear')),
-        h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;margin-top:6px' }, t.districts.map(box)))),
-      h('div', { class: 'row', style: 'gap:8px' },
-        h('button', { class: 'btn', type: 'button', onclick: save }, 'Save for this class'),
-        h('button', { class: 'btn alt', type: 'button', onclick: () => setAll(DISTRICT_ALL(), true) }, 'Tick everything'),
-        h('button', { class: 'btn ghost', type: 'button', onclick: () => setAll(DISTRICT_ALL(), false) }, 'Back to levels only')));
-  }
-  const DISTRICT_ALL = () => ((S.meta && S.meta.districts) || []).map((d) => d.n);
 
   // ---------- classes & pupils ----------
   async function classesView(root) {
@@ -395,8 +630,8 @@
         codeBox),
       h('div', { class: 'row', style: 'gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center' },
         h('button', { class: 'btn small', type: 'button', onclick: guard(async () => {
-          const msg = signOut.checked ? 'Make a new code and sign everyone in this class out?' : 'Make a new code? Pupils already signed in stay signed in.';
-          if (!confirm(msg)) return;
+          const msg = signOut.checked ? 'Everyone in this class will be signed out and will need the new code.' : 'Pupils who are already signed in stay signed in. New sign-ins need the new code.';
+          if (!(await UI.confirm({ title: 'Make a new class code?', body: msg, confirmLabel: 'Make new code' }))) return;
           const r = await api(`/classes/${c.id}/regen`, { method: 'POST', body: { signOut: signOut.checked } });
           c.code = r.code;
           await classesView(document.getElementById('tab'));
@@ -404,19 +639,19 @@
         }) }, 'New class code'),
         h('label', { class: 'small' }, signOut, ' also sign everyone out'),
         h('button', { class: 'btn small alt', type: 'button', onclick: guard(async () => {
-          const n = prompt('Rename class', c.name);
+          const n = await UI.prompt({ title: 'Rename class', label: 'Class name', value: c.name, maxlength: 60, confirmLabel: 'Rename' });
           if (n == null || !n.trim()) return;
           await api(`/classes/${c.id}`, { method: 'PATCH', body: { name: n } });
           render();
         }) }, 'Rename'),
         h('button', { class: 'btn small alt', type: 'button', onclick: guard(async () => {
-          if (!c.archived && !confirm('Archive this class? Its pupils are signed out and can’t sign in until you restore it.')) return;
+          if (!c.archived && !(await UI.confirm({ title: 'Archive this class?', body: 'Its pupils are signed out and can’t sign in until you restore it.', confirmLabel: 'Archive' }))) return;
           await api(`/classes/${c.id}`, { method: 'PATCH', body: { archived: !c.archived } });
           render();
         }) }, c.archived ? 'Restore' : 'Archive'),
         !(S.who.admin || c.owned) ? null : h('button', { class: 'btn small danger', type: 'button', onclick: guard(async () => {
-          const t = prompt(`This permanently deletes the class, its ${pd.pupils.length} pupils and all their results.\nType the class name to confirm:`);
-          if (t !== c.name) return t == null ? null : flash('The name didn’t match, so nothing was deleted.', true);
+          const del = await UI.ask({ title: 'Delete this class for good?', body: `This permanently deletes ${c.name}, its ${pd.pupils.length} pupil${pd.pupils.length === 1 ? '' : 's'} and all their results. It can’t be undone.`, typeToConfirm: c.name, danger: true, confirmLabel: 'Delete class' });
+          if (!del.ok) return;
           await api(`/classes/${c.id}`, { method: 'DELETE' });
           S.selClass = null;
           render();
@@ -455,20 +690,18 @@
       h('td', null, p.name), h('td', null, h('code', null, p.username)), h('td', null, p.attempts), h('td', null, p.xp), h('td', null, fmtTime(p.last_active)),
       h('td', null,
         h('button', { class: 'btn small alt', type: 'button', onclick: guard(async () => {
-          const n = prompt('Name', p.name);
-          if (n == null) return;
-          const u = prompt('Username', p.username);
-          if (u == null) return;
-          await api(`/pupils/${p.id}`, { method: 'PATCH', body: { name: n, username: u } });
+          const ed = await UI.ask({ title: 'Edit pupil', fields: [{ key: 'name', label: 'Name', value: p.name, maxlength: 60 }, { key: 'username', label: 'Username', value: p.username, maxlength: 30 }], confirmLabel: 'Save' });
+          if (!ed.ok) return;
+          await api(`/pupils/${p.id}`, { method: 'PATCH', body: { name: ed.values.name, username: ed.values.username } });
           await classesView(document.getElementById('tab'));
         }) }, 'Edit'),
         h('button', { class: 'btn small alt', type: 'button', onclick: guard(async () => {
-          if (!confirm(`Erase all of ${p.name}'s results? The account stays.`)) return;
+          if (!(await UI.confirm({ title: 'Erase ' + p.name + '’s results?', body: 'All their answers, XP and routes are removed. The account stays.', confirmLabel: 'Erase results', danger: true }))) return;
           await api(`/pupils/${p.id}/reset`, { method: 'POST' });
           await classesView(document.getElementById('tab'));
         }) }, 'Reset'),
         h('button', { class: 'btn small danger', type: 'button', onclick: guard(async () => {
-          if (!confirm(`Delete ${p.name} and all their results?`)) return;
+          if (!(await UI.confirm({ title: 'Delete ' + p.name + '?', body: 'The account and all their results are removed for good.', confirmLabel: 'Delete pupil', danger: true }))) return;
           await api(`/pupils/${p.id}`, { method: 'DELETE' });
           await classesView(document.getElementById('tab'));
         }) }, 'Delete')));
@@ -504,9 +737,9 @@
 
   // ---------- districts: where each question is delivered, plus the two switches ----------
   async function districtsView(root) {
-    const unlocks = await unlockPanel();
+    const unlocks = await unlockGridPanel();
     if (!S.who.admin) return root.replaceChildren(unlocks);
-    const [qs, st] = await Promise.all([api('/questions'), api('/settings')]);
+    const qs = await api('/questions');
     const D = (S.meta && S.meta.districts) || [];
     const tally = Object.fromEntries(D.map((d) => [d.n, { n: 0, tagged: 0 }]));
     for (const q of qs.questions) {
@@ -528,7 +761,6 @@
     const push = async (items) => {
       for (let i = 0; i < items.length; i += 40) await api('/questions/rules', { method: 'POST', body: { items: items.slice(i, i + 40) } });
     };
-    const sw = (key, label, hint) => h('label', { class: 'field' }, h('span', null, h('input', { type: 'checkbox', checked: !!st[key], onchange: guard(async (e) => { await api('/settings', { method: 'PUT', body: { [key]: e.target.checked } }); flash('Saved.'); }) }), ' ' + label), h('small', { class: 'muted' }, hint));
     const show = S.dShow || 'untagged';
     const shown = qs.questions.filter((q) => (show === 'all' ? true : show === 'untagged' ? !q.ruleSet : q.rule === +show)).slice(0, 150);
     const select = (q) => {
@@ -538,12 +770,6 @@
     };
     root.replaceChildren(
       unlocks,
-      levelsPanel(st),
-      h('section', { class: 'panel' },
-        h('h2', null, 'Town settings'),
-        sw('clock', 'Show the delivery clock and pay a speed bonus', 'A gentle, route-wide timer. It never ends a route. Turn it off to remove timing completely.'),
-        sw('openDistricts', 'Open every district for everyone', 'Ignores levels and class unlocks: every district is open to every pupil, and Rush Hour is open from the start. Use it for testing.'),
-      ),
       h('section', { class: 'panel' },
         h('h2', null, 'Parcels in each district'),
         h('p', { class: 'muted small' }, 'Every question belongs to one district. Until you choose, it is suggested from the question itself. Empty districts show as “coming soon” to pupils.'),
@@ -563,7 +789,7 @@
             render();
           }) }, 'Save my choices'),
           h('button', { class: 'btn alt', type: 'button', disabled: !untagged.length, onclick: guard(async () => {
-            if (!confirm('Lock in the suggested district for all ' + untagged.length + ' questions you haven’t chosen for? You can still change any of them.')) return;
+            if (!(await UI.confirm({ title: 'Accept all suggestions?', body: 'Lock in the suggested district for ' + untagged.length + ' questions you haven’t chosen for. You can still change any of them afterwards.', confirmLabel: 'Accept all' }))) return;
             await push(untagged.map((q) => ({ id: q.id, rule: q.auto })));
             flash('Suggestions saved for ' + untagged.length + ' questions.');
             render();
@@ -576,8 +802,9 @@
   }
 
   async function questionsView(root) {
-    const [qs, cls] = await Promise.all([api('/questions' + (S.qMode ? '?mode=' + S.qMode : '')), api('/classes')]);
+    const [qs, cls] = await Promise.all([api('/questions'), api('/classes')]);
     S.classes = cls.classes;
+    const all = qs.questions;
     const qText = (q) => {
       const d = q.data;
       if (q.mode === 1) return (d.lines ? '[new line] ' : d.beat ? '[action] ' : '') + d.prompt;
@@ -587,9 +814,42 @@
       if (q.mode === 6) return d.sentence;
       return `“${d.line}” ____ ${d.speaker}`;
     };
-    const filter = h('div', { class: 'seg no-print', role: 'group', 'aria-label': 'Filter by mode' },
-      [[0, 'All'], [1, 'Mode 1'], [2, 'Mode 2'], [3, 'Mode 3'], [4, 'Mode 4'], [5, 'Mode 5'], [6, 'Mode 6']].map(([m, l]) => h('button', { type: 'button', 'aria-pressed': String(S.qMode === m), onclick: () => { S.qMode = m; render(); } }, l)));
-    const rows = qs.questions.map((q) => h('tr', null,
+    const F = (S.qf = S.qf || { text: '', mode: 0, district: 0, scope: 'all', sort: 'newest', page: 1, size: 25 });
+    if (S.qMode && !F.mode) F.mode = S.qMode;
+    const hay = new Map(all.map((q) => [q.id, (qText(q) + ' ' + JSON.stringify(q.data)).toLowerCase()]));
+    const rate = (q) => (q.tries ? q.right / q.tries : 2); // untried questions sort last when looking for the hardest
+    const matching = () => {
+      const t = F.text.trim().toLowerCase();
+      let list = all.filter((q) => (!F.mode || q.mode === F.mode) && (!F.district || q.rule === F.district)
+        && (F.scope === 'all' || (F.scope === 'shared' ? !q.class_id : F.scope === 'mine' ? q.editable : String(q.class_id) === F.scope))
+        && (!t || hay.get(q.id).includes(t)));
+      if (F.sort === 'hardest') list = [...list].sort((x, y) => rate(x) - rate(y) || y.tries - x.tries);
+      else if (F.sort === 'used') list = [...list].sort((x, y) => y.tries - x.tries);
+      else if (F.sort === 'newest') list = [...list].sort((x, y) => y.id - x.id);
+      else list = [...list].sort((x, y) => x.id - y.id);
+      return list;
+    };
+    const tbody = h('tbody');
+    const pager = h('div', { class: 'row no-print', style: 'align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px' });
+    const count = h('h2', { class: 'grow', style: 'margin:0', 'aria-live': 'polite' });
+    const draw = () => {
+      const list = matching();
+      const pages = Math.max(1, Math.ceil(list.length / F.size));
+      F.page = Math.min(Math.max(1, F.page), pages);
+      const from = (F.page - 1) * F.size;
+      const slice = list.slice(from, from + F.size);
+      count.textContent = list.length === all.length ? `Question bank (${all.length})` : `Question bank: ${list.length} of ${all.length} match`;
+      tbody.replaceChildren(...(slice.length ? slice.map(row) : [h('tr', null, h('td', { colspan: '6', class: 'muted' }, 'No questions match. Try fewer filters or a different word.'))]));
+      const go = (n) => () => { F.page = n; draw(); };
+      pager.replaceChildren(
+        h('span', { class: 'small muted' }, list.length ? `Showing ${from + 1} to ${from + slice.length} of ${list.length}` : ''),
+        h('span', { class: 'grow' }),
+        h('button', { class: 'btn small alt', type: 'button', disabled: F.page <= 1, onclick: go(F.page - 1) }, 'Previous'),
+        h('span', { class: 'small' }, `Page ${F.page} of ${pages}`),
+        h('button', { class: 'btn small alt', type: 'button', disabled: F.page >= pages, onclick: go(F.page + 1) }, 'Next'),
+        h('label', { class: 'small' }, 'Per page ', h('select', { 'aria-label': 'Questions per page', onchange: (e) => { F.size = +e.target.value; F.page = 1; draw(); } }, [25, 50, 100].map((n) => h('option', { value: String(n), selected: n === F.size }, n)))));
+    };
+    const row = (q) => h('tr', null,
       h('td', null, 'M' + q.mode),
       h('td', { style: 'max-width:420px;white-space:pre-wrap' }, qText(q)),
       h('td', null, h('span', { class: 'small' }, dName(q.rule)), q.ruleSet ? null : h('span', { class: 'muted small' }, ' (auto)')),
@@ -598,16 +858,29 @@
       h('td', null, !q.editable ? h('span', { class: 'muted small' }, 'shared bank') : [
         h('button', { class: 'btn small alt', type: 'button', onclick: () => { S.editQ = q; render(); } }, 'Edit'),
         h('button', { class: 'btn small danger', type: 'button', onclick: guard(async () => {
-          if (!confirm('Remove this question? Past results stay in the analytics.')) return;
+          if (!(await UI.confirm({ title: 'Remove this question?', body: 'Pupils will stop seeing it. Past results stay in the analytics.', confirmLabel: 'Remove', danger: true }))) return;
           await api('/questions/' + q.id, { method: 'DELETE' });
           render();
-        }) }, 'Remove')])));
+        }) }, 'Remove')]));
+    const D = (S.meta && S.meta.districts) || [];
+    const search = h('input', { type: 'search', value: F.text, placeholder: 'Search the questions and answers', 'aria-label': 'Search questions', style: 'min-width:220px;flex:1', oninput: (e) => { F.text = e.target.value; F.page = 1; draw(); } });
+    const sel = (label, opts, cur, on) => h('label', { class: 'small', style: 'display:grid;gap:2px' }, label, h('select', { 'aria-label': 'Filter: ' + label, onchange: (e) => on(e.target.value) }, opts.map(([v, l]) => h('option', { value: String(v), selected: String(v) === String(cur) }, l))));
+    const filters = h('div', { class: 'row no-print', style: 'gap:10px;flex-wrap:wrap;align-items:end;margin:10px 0' },
+      h('label', { class: 'small grow', style: 'display:grid;gap:2px;min-width:220px' }, 'Search', search),
+      sel('Type', [[0, 'All types'], ...[1, 2, 3, 4, 5, 6].map((m) => [m, MODE_NAME[m]])], F.mode, (v) => { F.mode = +v; F.page = 1; draw(); }),
+      sel('District', [[0, 'All districts'], ...D.map((d) => [d.n, d.n + '. ' + d.name])], F.district, (v) => { F.district = +v; F.page = 1; draw(); }),
+      sel('Whose', [['all', 'Everything'], ['shared', 'Shared bank'], ['mine', 'Mine to edit'], ...S.classes.map((c) => [String(c.id), c.name])], F.scope, (v) => { F.scope = v; F.page = 1; draw(); }),
+      sel('Order', [['newest', 'Newest first'], ['oldest', 'Oldest first'], ['hardest', 'Hardest first'], ['used', 'Most answered']], F.sort, (v) => { F.sort = v; F.page = 1; draw(); }),
+      h('button', { class: 'btn small ghost', type: 'button', onclick: () => { S.qf = null; S.qMode = 0; render(); } }, 'Clear filters'));
+    draw();
     root.replaceChildren(
       questionForm(),
       importPanel(),
       h('section', { class: 'panel' },
-        h('div', { class: 'row', style: 'align-items:center;flex-wrap:wrap;gap:10px' }, h('h2', { class: 'grow', style: 'margin:0' }, `Question bank (${qs.questions.length})`), filter),
-        h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['', 'Question', 'District', 'Visible to', 'First-try correct', ''].map((t) => h('th', null, t)))), h('tbody', null, rows)))));
+        h('div', { class: 'row', style: 'align-items:center;flex-wrap:wrap;gap:10px' }, count),
+        filters,
+        h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['', 'Question', 'District', 'Visible to', 'First-try correct', ''].map((t) => h('th', null, t)))), tbody)),
+        pager));
   }
 
   function classSelect(val) {
@@ -844,7 +1117,7 @@
         h('td', null, v.past), h('td', null, v.tags.map((x) => S.meta.tags[x] || x).join(', ')), h('td', null, v.source),
         h('td', null,
           h('button', { class: 'btn small alt', type: 'button', onclick: () => editVerb(v) }, 'Edit'),
-          h('button', { class: 'btn small danger', type: 'button', onclick: guard(async () => { if (!confirm(`Delete “${v.base}”?`)) return; await api('/verbs/' + v.id, { method: 'DELETE' }); await verbsView(document.getElementById('tab')); }) }, 'Delete')))));
+          h('button', { class: 'btn small danger', type: 'button', onclick: guard(async () => { if (!(await UI.confirm({ title: 'Delete “' + v.base + '”?', body: 'It leaves the shared verb list.', confirmLabel: 'Delete', danger: true }))) return; await api('/verbs/' + v.id, { method: 'DELETE' }); await verbsView(document.getElementById('tab')); }) }, 'Delete')))));
     };
     const editor = h('div');
     const editVerb = (v) => {
@@ -960,5 +1233,6 @@
         h('section', { class: 'panel' }, h('h2', null, 'Hardest questions'), hard)));
   }
 
+  UI.watchOnline('You’re offline. Changes can’t be saved until you’re back online.');
   render();
 })();

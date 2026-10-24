@@ -7,7 +7,7 @@
 // Nothing here changes how an answer is marked or how XP is awarded for it. A route only adds a bonus (tips)
 // on top, worked out from attempts the pupil really made, so a browser cannot talk itself into extra XP.
 
-import { rankFor } from './rules.js';
+import { rankFor, RANKS } from './rules.js';
 import {
   DISTRICT_NUMS,
   RUSH_AT,
@@ -22,6 +22,11 @@ import {
   validateBands,
   DEFAULT_BANDS,
   LEVEL_TIERS,
+  validateThresholds,
+  DEFAULT_RANK_XP,
+  DEFAULT_VEHICLE_XP,
+  VEHICLES,
+  vehicleFor,
 } from './districts.js';
 import { HttpError, json, readJson, int } from './util.js';
 
@@ -33,7 +38,7 @@ const KINDS = ['route', 'big', 'rush', 'mode'];
 export async function getSettings(env) {
   let rows = [];
   try {
-    rows = (await env.DB.prepare("SELECT k, v FROM meta WHERE k IN ('clock', 'open_districts', 'level_bands')").all()).results || [];
+    rows = (await env.DB.prepare("SELECT k, v FROM meta WHERE k IN ('clock', 'open_districts', 'level_bands', 'rank_xp', 'vehicle_xp')").all()).results || [];
   } catch {}
   const m = Object.fromEntries(rows.map((r) => [r.k, r.v]));
   let bands = DEFAULT_BANDS;
@@ -47,12 +52,30 @@ export async function getSettings(env) {
       }
     } catch {} // a damaged value falls back to the defaults
   }
+  const thresholds = (key, count, what, fallback) => {
+    if (typeof m[key] !== 'string') return { xps: fallback, custom: false };
+    try {
+      const v = validateThresholds(JSON.parse(m[key]), count, what);
+      return v.ok ? { xps: v.xps, custom: true } : { xps: fallback, custom: false };
+    } catch {
+      return { xps: fallback, custom: false }; // a damaged value falls back to the standard amounts
+    }
+  };
+  const rk = thresholds('rank_xp', RANKS.length, 'rank', DEFAULT_RANK_XP);
+  const vh = thresholds('vehicle_xp', VEHICLES.length, 'ride', DEFAULT_VEHICLE_XP);
   return {
     clock: m.clock == null ? true : !!m.clock,
     openDistricts: !!m.open_districts,
     levelBands: bands,
     levelBandsCustom: custom,
     tierXp: LEVEL_TIERS.map((t) => ({ level: t.level, xp: xpForLevel(t.level, bands) })),
+    rankXp: rk.xps,
+    rankXpCustom: rk.custom,
+    vehicleXp: vh.xps,
+    vehicleXpCustom: vh.custom,
+    defaults: { levelBands: DEFAULT_BANDS, rankXp: DEFAULT_RANK_XP, vehicleXp: DEFAULT_VEHICLE_XP },
+    ranks: RANKS.map((r, i) => ({ name: r.name, xp: rk.xps[i] })),
+    vehicles: VEHICLES.map((v, i) => ({ id: v.id, name: v.name, xp: vh.xps[i] })),
   };
 }
 
@@ -66,6 +89,15 @@ export async function saveSettings(env, body) {
       const v = validateBands(body.levelBands);
       if (!v.ok) throw new HttpError(400, v.error);
       stmts.push(env.DB.prepare("INSERT INTO meta (k, v) VALUES ('level_bands', ?1) ON CONFLICT(k) DO UPDATE SET v = ?1").bind(JSON.stringify(v.bands)));
+    }
+  }
+  for (const [field, key, count, what] of [['rankXp', 'rank_xp', RANKS.length, 'rank'], ['vehicleXp', 'vehicle_xp', VEHICLES.length, 'ride']]) {
+    if (body[field] === undefined) continue;
+    if (body[field] === null) stmts.push(env.DB.prepare('DELETE FROM meta WHERE k = ?1').bind(key)); // back to the standard amounts
+    else {
+      const v = validateThresholds(body[field], count, what);
+      if (!v.ok) throw new HttpError(400, v.error);
+      stmts.push(env.DB.prepare('INSERT INTO meta (k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = ?2').bind(key, JSON.stringify(v.xps)));
     }
   }
   if (stmts.length) await env.DB.batch(stmts);
@@ -247,6 +279,7 @@ async function shape(env, p, visible, r, repeat, score) {
   const tips = await tipsTotal(env, p.id);
   const total = sum.xp + tips;
   const costly = r.costly_rule;
+  const settings = await getSettings(env);
   return {
     repeat,
     run: {
@@ -265,8 +298,9 @@ async function shape(env, p, visible, r, repeat, score) {
       fast: score ? score.fast : null,
     },
     xpTotal: total,
-    rank: rankFor(total),
-    level: levelFor(total, (await getSettings(env)).levelBands),
+    rank: rankFor(total, settings.rankXp),
+    vehicle: vehicleFor(total, settings.vehicleXp),
+    level: levelFor(total, settings.levelBands),
   };
 }
 

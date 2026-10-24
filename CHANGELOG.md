@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.7.0 — Class dashboard, unlock grid, game settings, a better play screen, saved choices, install
+
+**Teachers**
+- **Dashboard** is now the first tab and the page you land on. Pick a class to see, for the last 7 days: how many pupils played, XP and routes, where the class is by level (and how many can already reach districts 4–6 and 7–12), who is **stuck** (five or more first-try slips on one rule in two weeks), who **hasn't played** this week, the most-missed rules, and a sortable pupil table. Printable.
+- **Unlock grid** (Districts tab). Every class against every district in one table. Tick a cell to open that district for the whole class and it saves on the spot, with "Open all" and "Levels only" per class. Each row shows how many pupils have reached level 10 and 20, so you can see whether an early unlock is needed.
+- **Game settings** (admin) is now its own tab, split from Districts. XP per level, ranks, vehicles and the two switches live in one **draft**: nothing changes until you press Save, a bar appears when something is unsaved, Discard puts it back, and leaving with unsaved changes asks first. A **chart** of XP against level shows the saved curve and your draft, and a **live preview** tells you what the change would do ("3 pupils would lose districts 4–6", "Amy (5 Honesty) level 10 to 5") before you commit. The save confirmation repeats it.
+
+**Pupils**
+- **Play screen on phones.** The Check and Continue buttons stay in reach, and for typed answers the **answer bar sits above the on-screen keyboard** so the punctuation keys and Check are never hidden by it. Bigger tap targets, 16px text in boxes so iPhones don't zoom, and a tidier header.
+- **Punctuation keys** for speech marks, apostrophes, commas, full stops, question and exclamation marks, colon, semicolon, dash and ellipsis. They appear straight away on touch screens, can be shown or hidden with one tap on any device, and typing with them keeps the keyboard open. They also work when typing a fix in Spot the error.
+- **Garage, sound and keys follow the pupil.** Their ride's paint, helmet and sticker, and the sound and punctuation-key choices, are saved on their account, so they are the same on the classroom computer, a tablet and a phone. Only items they have unlocked can be chosen.
+- **Install to the home screen.** The pupil app is an installable web app: an icon, a full-screen launch with no browser bars, a service worker so it opens quickly and shows the app even with a poor connection (answers and progress always go to the server, and the teacher console is never cached), and a button under Me (or "Share, Add to Home Screen" instructions on iPhones). Layout keeps clear of notches and the home bar.
+
+**Under the hood**
+- One new table, `pupil_prefs`. Run `npm run db:prefs:remote` (safe to repeat, and safe before deploying). Until it runs, choices still work on the device and just aren't saved to the account.
+- New files: `manifest.webmanifest`, `sw.js`, `_headers`, `icons/`, `prefs.js`. `scripts/make-icons.py` redraws the icons (optional).
+- Tests: 194 in total, including browser tests for every new screen and the install files.
+
+## 1.6.0 — Phones, dialogs, a searchable question bank, keyboard and sound
+
+**Pupils**
+- **Phone navigation.** On phones a bottom bar with Town, Depot, Garage and Me replaces the wrapping row of tabs. Redeliveries and the Handbook live under Me. It steps aside while a question is on screen. Tablets and laptops keep the top tabs.
+- **Simple sounds** made in the browser (no files): right, wrong, combo, a slip on a Big Delivery, route done, and level-up. A speaker button in the header and a switch under Me turn them off; the choice is remembered. Sounds never play before the pupil has tapped something.
+- **Loading and error states.** Loading placeholders instead of a blank page, "Packing your parcels" while a route loads, an "offline" banner, and a "Can't reach Dash Express" screen with Try again. Losing signal no longer signs a pupil out, and a failed route start explains itself and stays on the same screen.
+- **Focus and keyboard.** A visible focus ring everywhere, a "Skip to main content" link, focus moves into the new screen when you change section, the page stays where it was when you tap a swatch or switch (it only jumps to the top on a new screen or question), screen-reader announcements for correct and incorrect answers, and tap targets of at least 44px on phones.
+
+**Teachers**
+- **Custom dialogs** replace all 14 browser pop-ups. Risky ones start on Cancel, deleting a class asks you to type its name, and Escape cancels. Messages are toasts that stay out of the way, and errors stay longer and are announced to screen readers.
+- **Question bank:** search (the question and its answers), filters for type, district and whose, sort by newest, oldest, hardest or most answered, paging (25, 50 or 100), "Showing 26 to 50 of 504", and the filters are remembered while you move between tabs.
+- **Loading and error states** in the console too: placeholders, a retry panel with a clear message when the connection drops, and an offline banner. The page keeps its place and scroll position when it reloads.
+- Console headings and tabs are reachable by keyboard, with a skip link and visible focus.
+
+**Under the hood**
+- New shared files: `ui.js` (dialogs, toasts, announcements, loading and error panels) and `sfx.js`.
+- Browser tests: `npm run test:ui` runs the real pupil app and teacher console in a simulated browser (jsdom) against the real server code, including an automatic accessibility check on every screen. `npm test` runs everything. No database change.
+
+## 1.5.0 — XP for each rank and each vehicle
+
+- **The super admin can set the XP for every rank and every delivery vehicle.** Districts tab, "XP for ranks and vehicles". The two lists are separate, so a new ride can arrive earlier or later than a new rank. They start out the same as before: 0, 60, 160, 320, 560 and 900 XP.
+- Rules: the first of each list is always 0, each amount must be a whole number higher than the one before, and the whole save is refused if anything is wrong (nothing changes). "Reset to the standard amounts" goes back to the defaults.
+- Changes apply to everyone straight away, and count XP from answers plus tips. Rank and ride names don't change. Paint, helmets and stickers keep their own fixed XP. Levels and unlocks are separate and unaffected.
+- Pupils now see their rank and ride progress separately ("XP to the next rank", "XP to a new ride"), the garage lists each ride's XP, and a finished route shows a separate "New rank" and "New ride" banner.
+- Teachers can read but not change these amounts. No database change: they are stored in the existing `meta` table, and a damaged value falls back to the standard amounts.
+- Tests: 148 in total (11 new).
+
 ## 1.4.0 — Super admin, and teachers who run their own classes
 
 - **Super admin.** The Cloudflare sign-in (`teacher_user` / `teacher_password`) is now called the super admin in the console. It keeps every power it had.

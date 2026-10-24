@@ -171,9 +171,11 @@ export const RANKS = [
   { xp: 900, name: 'Master Storyteller' },
 ];
 
-export function rankFor(xp) {
+// xps: optional replacement XP thresholds (one per rank, set by the admin). The names never change.
+export function rankFor(xp, xps) {
+  const list = RANKS.map((r, i) => ({ name: r.name, xp: xps && Number.isInteger(xps[i]) ? xps[i] : r.xp }));
   let idx = 0;
-  for (let i = 0; i < RANKS.length; i++) if (xp >= RANKS[i].xp) idx = i;
-  const next = RANKS[idx + 1] || null;
-  return { index: idx, name: RANKS[idx].name, from: RANKS[idx].xp, next: next ? next.xp : null, nextName: next ? next.name : null };
+  for (let i = 0; i < list.length; i++) if (xp >= list[i].xp) idx = i;
+  const next = list[idx + 1] || null;
+  return { index: idx, name: list[idx].name, from: list[idx].xp, next: next ? next.xp : null, nextName: next ? next.name : null };
 }

@@ -19,6 +19,8 @@ import {
 import { VERSION } from './version.js';
 import { LEVEL_TIERS, DEFAULT_BANDS, levelFor, DISTRICTS, VEHICLES, COSMETICS, ROUTE_LEN, BIG_LEN, RUSH_LEN, BIG_PATIENCE, BIG_AT, RUSH_AT, PAR_MS_PER_STOP, ruleOf } from './districts.js';
 import { pupilState, tipsTotal, finishRoute, pupilAccess, levelInfo, getSettings } from './express.js';
+import { vehicleFor, DEFAULT_RANK_XP } from './districts.js';
+import { readablePrefs, loadPrefsRaw, savePrefs } from './prefs.js';
 import { judgeVerb, suggestVerbs } from './verbs.js';
 import { signToken, cleanCode } from './auth.js';
 import { HttpError, json, readJson, clientIp, rateLimited, clip, int, cleanUser } from './util.js';
@@ -75,11 +77,13 @@ export async function authPupil(env, payload) {
   return { id: row.id, name: row.name, classId: row.class_id, guest: !!row.is_guest, className: row.class_name || 'Guest' };
 }
 
-export function meta() {
+// env is optional: without it the standard rank and ride amounts are described.
+export async function meta(env) {
+  const cfg = env ? await getSettings(env) : null;
   const codes = {};
   for (const [k, v] of Object.entries(CODES)) codes[k] = { rule: v.rule, label: v.label, hidden: !!v.hidden };
   const route = { len: ROUTE_LEN, big: BIG_LEN, rush: RUSH_LEN, patience: BIG_PATIENCE, bigAt: BIG_AT, rushAt: RUSH_AT, parMs: PAR_MS_PER_STOP };
-  return json({ rules: RULES, codes, tags: TAGS, ranks: RANKS, version: VERSION, districts: DISTRICTS, vehicles: VEHICLES, cosmetics: COSMETICS, route, levels: { tiers: LEVEL_TIERS, defaultBands: DEFAULT_BANDS } });
+  return json({ rules: RULES, codes, tags: TAGS, ranks: cfg ? cfg.ranks : RANKS, version: VERSION, districts: DISTRICTS, vehicles: cfg ? cfg.vehicles : VEHICLES.map((v, i) => ({ ...v, xp: DEFAULT_RANK_XP[i] })), cosmetics: COSMETICS, route, levels: { tiers: LEVEL_TIERS, defaultBands: DEFAULT_BANDS } });
 }
 
 // ---------- questions ----------
@@ -171,7 +175,10 @@ export async function me(env, p) {
     answerXp: xp,
     tips: st.tips,
     todayXp,
-    rank: rankFor(total),
+    rank: rankFor(total, access.settings.rankXp),
+    vehicle: vehicleFor(total, access.settings.vehicleXp),
+    rides: access.settings.vehicles,
+    prefs: readablePrefs(await loadPrefsRaw(env, p.id), total),
     streak,
     modes,
     wrong,
@@ -185,6 +192,13 @@ export async function me(env, p) {
     tip: st.tip,
     routes: st.routes,
   });
+}
+
+// ---------- the pupil's own choices (garage look, sound, punctuation keys) ----------
+
+export async function prefs(request, env, p) {
+  const t = await env.DB.prepare('SELECT COALESCE(SUM(xp), 0) AS xp FROM attempts WHERE pupil_id = ?1').bind(p.id).first();
+  return savePrefs(request, env, p, t.xp + (await tipsTotal(env, p.id)));
 }
 
 // ---------- finishing a route (Dash Express) ----------
@@ -206,7 +220,8 @@ async function record(env, p, q, { tryNo, practice, correct, xp, answer, codes }
     .run();
   const t = await env.DB.prepare('SELECT COALESCE(SUM(xp), 0) AS xp FROM attempts WHERE pupil_id = ?1').bind(p.id).first();
   const total = t.xp + (await tipsTotal(env, p.id));
-  return { xpTotal: total, rank: rankFor(total), level: levelFor(total, (await getSettings(env)).levelBands) };
+  const cfg = await getSettings(env);
+  return { xpTotal: total, rank: rankFor(total, cfg.rankXp), vehicle: vehicleFor(total, cfg.vehicleXp), level: levelFor(total, cfg.levelBands) };
 }
 
 const explainFor = (e, cTk) => explainErr(e, cTk);

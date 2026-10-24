@@ -1,12 +1,12 @@
 {
   "name": "dialogue-dash",
-  "version": "1.4.0",
+  "version": "1.7.0",
   "private": true,
   "type": "module",
   "description": "Dash Express: gamified dialogue-writing practice (speech marks, punctuation, speech tags, reported speech, tense) on Cloudflare Workers + D1",
   "scripts": {
     "seed:build": "node scripts/make-seed.mjs",
-    "test": "node --test test/engine.test.mjs test/verbs.test.mjs test/seed.test.mjs test/modes.test.mjs test/seed-new.test.mjs test/payload.test.mjs test/express.test.mjs test/accounts.test.mjs",
+    "test": "npm run test:server && npm run test:ui",
     "dev": "wrangler dev",
     "db:init:local": "wrangler d1 execute dialogue-dash --local --file=./schema.sql && wrangler d1 execute dialogue-dash --local --file=./seed.sql",
     "db:init:remote": "wrangler d1 execute dialogue-dash --remote --file=./schema.sql && wrangler d1 execute dialogue-dash --remote --file=./seed.sql",
@@ -24,9 +24,14 @@
     "db:accounts:local": "wrangler d1 execute dialogue-dash --local --file=./migrations/0004_teacher_accounts.sql && wrangler d1 execute dialogue-dash --local --file=./migrations/0005_class_owners.sql",
     "db:accounts:remote": "wrangler d1 execute dialogue-dash --remote --file=./migrations/0004_teacher_accounts.sql && wrangler d1 execute dialogue-dash --remote --file=./migrations/0005_class_owners.sql",
     "db:express:local": "wrangler d1 execute dialogue-dash --local --file=./migrations/0003_dash_express.sql",
-    "db:express:remote": "wrangler d1 execute dialogue-dash --remote --file=./migrations/0003_dash_express.sql"
+    "db:express:remote": "wrangler d1 execute dialogue-dash --remote --file=./migrations/0003_dash_express.sql",
+    "test:ui": "node --test test/ui/pupil.test.mjs test/ui/teacher.test.mjs",
+    "test:server": "node --test test/engine.test.mjs test/verbs.test.mjs test/seed.test.mjs test/modes.test.mjs test/seed-new.test.mjs test/payload.test.mjs test/express.test.mjs test/accounts.test.mjs test/ranks.test.mjs test/v17.test.mjs",
+    "db:prefs:remote": "wrangler d1 execute dialogue-dash --remote --file=./migrations/0006_pupil_prefs.sql",
+    "db:prefs:local": "wrangler d1 execute dialogue-dash --local --file=./migrations/0006_pupil_prefs.sql"
   },
   "devDependencies": {
+    "jsdom": "^30.1.3",
     "wrangler": "^4"
   }
 }

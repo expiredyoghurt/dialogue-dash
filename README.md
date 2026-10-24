@@ -16,7 +16,9 @@ Pupils are couriers in Chatterbury. Each question is a parcel; fixing the messag
 
 **Accounts (v1.3-1.4).** The `teacher_user` / `teacher_password` secrets are the **super admin**. The super admin adds teacher accounts on the Teachers tab. Each teacher is the admin of their own classes: they create them, run them and can delete the ones they created, and see nothing of other teachers' classes. See CHANGELOG.md for exactly what each can do.
 
-Upgrading from 1.1 or 1.2: run `npm run db:express:remote` and `npm run db:accounts:remote` (add the new tables; safe to repeat), then `npm run deploy`. No question is changed; each one is placed in a district automatically until you choose one. See CHANGELOG.md.
+**Phones and install (v1.6-1.7).** A bottom navigation bar on phones, sounds, punctuation keys and an answer bar that stays above the keyboard, an installable home-screen app, a class dashboard and unlock grid for teachers, and a Game settings page for the admin. Pupil choices (ride, sound, keys) follow them between devices. `npm test` runs the server tests and the simulated-browser tests.
+
+Upgrading from 1.1 or 1.2: run `npm run db:express:remote`, `npm run db:accounts:remote` and `npm run db:prefs:remote` (add the new tables; safe to repeat), then `npm run deploy`. No question is changed; each one is placed in a district automatically until you choose one. See CHANGELOG.md.
 
 ## Modes
 1. **Rewrite it** – retype a stripped sentence with correct marks (3 tries, feedback per rule).

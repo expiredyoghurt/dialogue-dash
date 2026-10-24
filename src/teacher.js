@@ -6,6 +6,8 @@ import { saveVerb, writeForms, cleanTags, cleanWord, validWord, regularPast } fr
 import { ALL_MODES, validateMode1Extras, validateMode4, validateMode5, validateMode6, previewMode, cleanRule } from './modes.js';
 import { DISTRICTS, autoRule, ruleOf, isRule } from './districts.js';
 import { getSettings, saveSettings } from './express.js';
+import { levelFor, validateBands, validateThresholds, vehicleFor, allowedDistricts, DEFAULT_BANDS } from './districts.js';
+import { rankFor, RANKS } from './rules.js';
 import { LEVEL_TIERS, DISTRICT_NUMS } from './districts.js';
 import {
   ADMIN, canClass, needClass, needAdmin, teacherSignIn, whoAmI, listTeachers, createTeacher, updateTeacher, resetTeacherPassword, deleteTeacher, changeOwnPassword,
@@ -58,6 +60,185 @@ async function listClasses(env, who) {
   for (const c of rows) c.owned = who.admin || owned.has(c.id);
   const guests = who.admin ? (await env.DB.prepare('SELECT COUNT(*) AS n FROM pupils WHERE is_guest = 1').first()).n : 0;
   return json({ classes: rows, guests });
+}
+
+// ---------- class dashboard ----------
+
+const DAY = 86_400_000;
+const STUCK_AT = 5; // first-try slips on one rule, within a fortnight, before we call a pupil stuck
+
+// The rules behind a list of error codes, each counted once (an attempt with three comma slips is one slip on rule 4).
+function rulesOfCodes(raw) {
+  const out = new Set();
+  for (const c of parse(raw, [])) {
+    const m = CODES[c];
+    if (m && !m.hidden && m.rule) out.add(m.rule);
+  }
+  return out;
+}
+
+async function dashboard(env, url, who) {
+  const classId = int(url.searchParams.get('class'), 0);
+  if (!classId) throw new HttpError(400, 'Choose a class.');
+  needClass(who, classId);
+  const cls = await env.DB.prepare('SELECT id, name FROM classes WHERE id = ?1').bind(classId).first();
+  if (!cls) throw new HttpError(404, 'No such class.');
+  const settings = await getSettings(env);
+  const now = Date.now();
+  const d7 = now - 7 * DAY;
+  const d14 = now - 14 * DAY;
+  const pupils = (await env.DB.prepare('SELECT id, name, username FROM pupils WHERE class_id = ?1 ORDER BY name COLLATE NOCASE').bind(classId).all()).results || [];
+  const att = new Map(((await env.DB.prepare('SELECT pupil_id, COALESCE(SUM(xp), 0) AS xp, MAX(ts) AS last, SUM(CASE WHEN ts >= ?2 THEN 1 ELSE 0 END) AS a7, SUM(CASE WHEN ts >= ?2 THEN xp ELSE 0 END) AS xp7 FROM attempts WHERE class_id = ?1 GROUP BY pupil_id').bind(classId, d7).all()).results || []).map((r) => [r.pupil_id, r]));
+  let runRows = [];
+  try {
+    runRows = (await env.DB.prepare('SELECT pupil_id, COALESCE(SUM(bonus), 0) AS tips, SUM(CASE WHEN ts >= ?2 THEN 1 ELSE 0 END) AS r7, SUM(CASE WHEN ts >= ?2 THEN bonus ELSE 0 END) AS tips7 FROM route_runs WHERE class_id = ?1 GROUP BY pupil_id').bind(classId, d7).all()).results || [];
+  } catch {} // routes not migrated yet
+  const runs = new Map(runRows.map((r) => [r.pupil_id, r]));
+  const misses = (await env.DB.prepare('SELECT pupil_id, codes FROM attempts WHERE class_id = ?1 AND ts >= ?2 AND correct = 0 AND try_no = 1 ORDER BY id DESC LIMIT 5000').bind(classId, d14).all()).results || [];
+
+  // slips: per pupil per rule, and across the class per rule
+  const perPupil = new Map();
+  const perRule = new Map();
+  for (const m of misses) {
+    for (const r of rulesOfCodes(m.codes)) {
+      const pp = perPupil.get(m.pupil_id) || new Map();
+      pp.set(r, (pp.get(r) || 0) + 1);
+      perPupil.set(m.pupil_id, pp);
+      const pr = perRule.get(r) || { rule: r, misses: 0, who: new Set() };
+      pr.misses++;
+      pr.who.add(m.pupil_id);
+      perRule.set(r, pr);
+    }
+  }
+  const topSlip = (id) => {
+    const pp = perPupil.get(id);
+    if (!pp) return null;
+    let best = null;
+    for (const [rule, n] of pp) if (!best || n > best.n) best = { rule, n };
+    return best;
+  };
+
+  const levelCounts = {};
+  let reach10 = 0;
+  let reach20 = 0;
+  const list = pupils.map((p) => {
+    const a = att.get(p.id) || { xp: 0, last: null, a7: 0, xp7: 0 };
+    const r = runs.get(p.id) || { tips: 0, r7: 0, tips7: 0 };
+    const total = a.xp + r.tips;
+    const level = levelFor(total, settings.levelBands);
+    levelCounts[level] = (levelCounts[level] || 0) + 1;
+    if (level >= 10) reach10++;
+    if (level >= 20) reach20++;
+    return { id: p.id, name: p.name, username: p.username, level, xp: total, rank: rankFor(total, settings.rankXp).name, lastActive: a.last || null, xp7: a.xp7 + r.tips7, attempts7: a.a7, routes7: r.r7, topSlip: topSlip(p.id) };
+  });
+  const active = list.filter((p) => p.lastActive && p.lastActive >= d7);
+  const stuck = list.filter((p) => p.topSlip && p.topSlip.n >= STUCK_AT).map((p) => ({ pupilId: p.id, name: p.name, rule: p.topSlip.rule, n: p.topSlip.n })).sort((x, y) => y.n - x.n);
+  const quiet = list.filter((p) => !p.lastActive || p.lastActive < d7).map((p) => ({ pupilId: p.id, name: p.name, lastActive: p.lastActive }));
+  const rules = [...perRule.values()].map((r) => ({ rule: r.rule, misses: r.misses, pupils: r.who.size })).sort((x, y) => y.misses - x.misses).slice(0, 5);
+  const manual = parse((await env.DB.prepare('SELECT unlocked FROM class_settings WHERE class_id = ?1').bind(classId).first().catch(() => null))?.unlocked, []);
+  return json({
+    class: cls,
+    since: d7,
+    totals: { pupils: list.length, active7: active.length, quiet7: list.length - active.length, xp7: list.reduce((n, p) => n + p.xp7, 0), routes7: list.reduce((n, p) => n + p.routes7, 0), attempts7: list.reduce((n, p) => n + p.attempts7, 0) },
+    pupils: list,
+    levelCounts,
+    reach: { 10: reach10, 20: reach20 },
+    tierXp: settings.tierXp,
+    manual: Array.isArray(manual) ? manual : [],
+    rules,
+    stuck,
+    quiet,
+  });
+}
+
+// ---------- unlock grid: every class against every district ----------
+
+async function unlockGrid(env, who) {
+  const settings = await getSettings(env);
+  const classes = ((await env.DB.prepare('SELECT id, name FROM classes WHERE archived = 0 ORDER BY name COLLATE NOCASE').all()).results || []).filter((c) => canClass(who, c.id));
+  if (!classes.length) return json({ classes: [], tiers: LEVEL_TIERS, tierXp: settings.tierXp });
+  const ids = classes.map((c) => c.id);
+  const marks = ids.map((_, i) => `?${i + 1}`).join(',');
+  const pupilRows = (await env.DB.prepare(`SELECT p.id, p.class_id, COALESCE(SUM(a.xp), 0) AS xp FROM pupils p LEFT JOIN attempts a ON a.pupil_id = p.id WHERE p.class_id IN (${marks}) GROUP BY p.id`).bind(...ids).all()).results || [];
+  let tipRows = [];
+  try {
+    tipRows = (await env.DB.prepare(`SELECT pupil_id, COALESCE(SUM(bonus), 0) AS tips FROM route_runs WHERE class_id IN (${marks}) GROUP BY pupil_id`).bind(...ids).all()).results || [];
+  } catch {}
+  const tips = new Map(tipRows.map((r) => [r.pupil_id, r.tips]));
+  let setRows = [];
+  try {
+    setRows = (await env.DB.prepare(`SELECT class_id, unlocked FROM class_settings WHERE class_id IN (${marks})`).bind(...ids).all()).results || [];
+  } catch {}
+  const manual = new Map(setRows.map((r) => [r.class_id, parse(r.unlocked, [])]));
+  const stat = new Map(ids.map((id) => [id, { pupils: 0, reached: { 10: 0, 20: 0 } }]));
+  for (const p of pupilRows) {
+    const s = stat.get(p.class_id);
+    if (!s) continue;
+    s.pupils++;
+    const level = levelFor(p.xp + (tips.get(p.id) || 0), settings.levelBands);
+    if (level >= 10) s.reached[10]++;
+    if (level >= 20) s.reached[20]++;
+  }
+  return json({
+    classes: classes.map((c) => ({ id: c.id, name: c.name, pupils: stat.get(c.id).pupils, reached: stat.get(c.id).reached, unlocked: (manual.get(c.id) || []).filter((n) => DISTRICT_NUMS.includes(n)) })),
+    tiers: LEVEL_TIERS,
+    tierXp: settings.tierXp,
+  });
+}
+
+// ---------- what a settings change would do (admin), before it is saved ----------
+
+async function settingsPreview(request, env) {
+  const body = await readJson(request);
+  const cur = await getSettings(env);
+  let bands = cur.levelBands;
+  let rankXp = cur.rankXp;
+  let vehicleXp = cur.vehicleXp;
+  if (body.levelBands != null) {
+    const v = validateBands(body.levelBands);
+    if (!v.ok) throw new HttpError(400, v.error);
+    bands = v.bands;
+  } else if (body.levelBands === null) bands = DEFAULT_BANDS;
+  if (body.rankXp != null) {
+    const v = validateThresholds(body.rankXp, RANKS.length, 'rank');
+    if (!v.ok) throw new HttpError(400, v.error);
+    rankXp = v.xps;
+  }
+  if (body.vehicleXp != null) {
+    const v = validateThresholds(body.vehicleXp, 6, 'ride');
+    if (!v.ok) throw new HttpError(400, v.error);
+    vehicleXp = v.xps;
+  }
+  const rows = (await env.DB.prepare('SELECT p.id, p.name, c.name AS cname, COALESCE(SUM(a.xp), 0) AS xp FROM pupils p LEFT JOIN attempts a ON a.pupil_id = p.id LEFT JOIN classes c ON c.id = p.class_id GROUP BY p.id').all()).results || [];
+  let tipRows = [];
+  try {
+    tipRows = (await env.DB.prepare('SELECT pupil_id, COALESCE(SUM(bonus), 0) AS tips FROM route_runs GROUP BY pupil_id').all()).results || [];
+  } catch {}
+  const tips = new Map(tipRows.map((r) => [r.pupil_id, r.tips]));
+  const out = { pupils: rows.length, level: { up: 0, down: 0 }, rank: { up: 0, down: 0 }, ride: { up: 0, down: 0 }, lose: { 4: 0, 7: 0 }, gain: { 4: 0, 7: 0 }, sample: [] };
+  for (const p of rows) {
+    const xp = p.xp + (tips.get(p.id) || 0);
+    const l0 = levelFor(xp, cur.levelBands);
+    const l1 = levelFor(xp, bands);
+    if (l1 > l0) out.level.up++;
+    if (l1 < l0) out.level.down++;
+    const a0 = allowedDistricts({ level: l0 });
+    const a1 = allowedDistricts({ level: l1 });
+    for (const d of [4, 7]) {
+      if (a0.has(d) && !a1.has(d)) out.lose[d]++;
+      if (!a0.has(d) && a1.has(d)) out.gain[d]++;
+    }
+    const r0 = rankFor(xp, cur.rankXp).index;
+    const r1 = rankFor(xp, rankXp).index;
+    if (r1 > r0) out.rank.up++;
+    if (r1 < r0) out.rank.down++;
+    const v0 = vehicleFor(xp, cur.vehicleXp).index;
+    const v1 = vehicleFor(xp, vehicleXp).index;
+    if (v1 > v0) out.ride.up++;
+    if (v1 < v0) out.ride.down++;
+    if ((l0 !== l1 || r0 !== r1 || v0 !== v1) && out.sample.length < 6) out.sample.push({ name: p.name, className: p.cname || 'Guest', from: { level: l0, rank: RANKS[r0].name }, to: { level: l1, rank: RANKS[r1].name } });
+  }
+  return json(out);
 }
 
 // ---------- districts opened by hand for a class ----------
@@ -173,6 +354,16 @@ async function tableDelete(env, table, col, id) {
   return [env.DB.prepare(`DELETE FROM ${table} WHERE ${col} = ?1`).bind(id)];
 }
 
+// Preferences of every pupil in a class, removed with the class (they are deleted by pupil id, before the pupils go).
+async function prefsOfClass(env, classId) {
+  try {
+    await env.DB.prepare('SELECT 1 FROM pupil_prefs LIMIT 1').first();
+  } catch {
+    return [];
+  }
+  return [env.DB.prepare('DELETE FROM pupil_prefs WHERE pupil_id IN (SELECT id FROM pupils WHERE class_id = ?1)').bind(classId)];
+}
+
 async function deleteClass(env, id) {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM attempts WHERE class_id = ?1').bind(id),
@@ -180,6 +371,7 @@ async function deleteClass(env, id) {
     ...(await tableDelete(env, 'class_settings', 'class_id', id)),
     ...(await tableDelete(env, 'teacher_classes', 'class_id', id)),
     ...(await tableDelete(env, 'class_owners', 'class_id', id)),
+    ...(await prefsOfClass(env, id)),
     env.DB.prepare('DELETE FROM pupils WHERE class_id = ?1').bind(id),
     env.DB.prepare('DELETE FROM classes WHERE id = ?1').bind(id),
   ]);
@@ -279,7 +471,7 @@ async function updatePupil(request, env, id) {
 }
 
 async function deletePupil(env, id) {
-  await env.DB.batch([env.DB.prepare('DELETE FROM attempts WHERE pupil_id = ?1').bind(id), ...(await routeRunsDelete(env, 'pupil_id', id)), env.DB.prepare('DELETE FROM pupils WHERE id = ?1').bind(id)]);
+  await env.DB.batch([env.DB.prepare('DELETE FROM attempts WHERE pupil_id = ?1').bind(id), ...(await routeRunsDelete(env, 'pupil_id', id)), ...(await tableDelete(env, 'pupil_prefs', 'pupil_id', id)), env.DB.prepare('DELETE FROM pupils WHERE id = ?1').bind(id)]);
   return json({ ok: true });
 }
 async function resetPupil(env, id) {
@@ -728,6 +920,12 @@ export async function teacherRoute(request, env, url, who = ADMIN) {
       return json(await saveSettings(env, await readJson(request)));
     }
     return null;
+  }
+  if (path === '/dashboard' && m === 'GET') return dashboard(env, url, who);
+  if (path === '/unlock-grid' && m === 'GET') return unlockGrid(env, who);
+  if (path === '/settings/preview' && m === 'POST') {
+    needAdmin(who, 'Only the admin can change the town-wide settings.');
+    return settingsPreview(request, env);
   }
   if (path === '/districts' && m === 'GET') return json({ districts: DISTRICTS, tiers: LEVEL_TIERS, tierXp: (await getSettings(env)).tierXp });
   if ((x = path.match(/^\/questions\/(\d+)$/))) {
